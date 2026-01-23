@@ -1,0 +1,46 @@
+# FLUX.2-klein-4B Model Configuration
+# ~4B parameter efficient model with Qwen3-4B text encoder
+# Uses 128 latent channels for compact spatial representation
+
+model:
+  type: "flux"
+  version: "v2"
+  variant: "flux2-klein-4b"
+
+  # Transformer (DiT) Configuration
+  transformer:
+    in_channels: 512             # 128 latent channels * 4 (packed)
+    hidden_size: 2048            # Smaller than full FLUX.2
+    num_layers: 5                # Fewer joint blocks
+    num_single_layers: 20        # Fewer single blocks
+    attention_head_dim: 128
+    num_attention_heads: 16      # Fewer heads
+    joint_attention_dim: 4096    # Qwen hidden size
+    pooled_projection_dim: 4096  # Qwen pooled output
+    guidance_embeds: true
+    qk_norm: true                # QK normalization for stability
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 128         # High channel count for klein
+    block_out_channels: [128, 256, 512, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 0.3611
+    shift_factor: 0.1159
+
+  # Text Encoder Configuration
+  text_encoder:
+    type: "qwen"
+    model_id: "Qwen/Qwen3-4B"
+    hidden_size: 4096
+    max_length: 512
+
+  # Scheduler Configuration
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 3.0
+    base_shift: 0.5
+    max_shift: 1.15

@@ -1,0 +1,46 @@
+# FLUX.2-dev Model Configuration
+# 32B parameter model with Mistral-3 text encoder
+# Uses 32 latent channels and different block configuration than FLUX.1
+
+model:
+  type: "flux"
+  version: "v2"
+  variant: "flux2-dev"
+
+  # Transformer (DiT) Configuration
+  transformer:
+    in_channels: 128             # 32 latent channels * 4 (packed)
+    hidden_size: 3072
+    num_layers: 8                # Fewer joint blocks than FLUX.1
+    num_single_layers: 48        # More single blocks than FLUX.1
+    attention_head_dim: 128
+    num_attention_heads: 24
+    joint_attention_dim: 4096    # Mistral hidden size
+    pooled_projection_dim: 4096  # Mistral pooled output
+    guidance_embeds: true        # Enable guidance
+    qk_norm: true                # QK normalization for stability
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 32          # FLUX.2-dev uses 32 channels
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 0.3611
+    shift_factor: 0.1159
+
+  # Text Encoder Configuration
+  text_encoder:
+    type: "mistral"
+    model_id: "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+    hidden_size: 4096
+    max_length: 512
+
+  # Scheduler Configuration
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 3.0
+    base_shift: 0.5
+    max_shift: 1.15

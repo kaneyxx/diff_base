@@ -1,46 +1,14 @@
-# Flux Model Configuration
+# Flux Model Configuration (Alias for FLUX.1-dev)
+# For new projects, prefer using explicit config files:
+# - flux1_dev.yaml or flux1_schnell.yaml for FLUX.1
+# - flux2_dev.yaml, flux2_klein_4b.yaml, or flux2_klein_9b.yaml for FLUX.2
 
-model:
-  type: "flux"
-  variant: "dev"  # or "schnell"
+# This file defaults to FLUX.1-dev for backwards compatibility
+_base_:
+  - flux1_dev.yaml
 
-  # Transformer (DiT) Configuration
-  transformer:
-    in_channels: 64
-    hidden_size: 3072
-    num_layers: 19
-    num_single_layers: 38
-    attention_head_dim: 128
-    num_attention_heads: 24
-    joint_attention_dim: 4096
-    pooled_projection_dim: 768
-    guidance_embeds: true  # false for schnell
-
-  # VAE Configuration
-  vae:
-    in_channels: 3
-    out_channels: 3
-    latent_channels: 16
-    block_out_channels: [128, 256, 512, 512]
-    layers_per_block: 2
-    scaling_factor: 0.3611
-    shift_factor: 0.1159
-
-  # Text Encoder Configuration
-  text_encoder:
-    t5:
-      hidden_size: 4096
-      num_layers: 24
-      max_position_embeddings: 512
-    clip_l:
-      hidden_size: 768
-      num_layers: 12
-      max_position_embeddings: 77
-
-  # Scheduler Configuration (Flow Matching)
-  scheduler:
-    type: "flow_matching"
-    num_train_timesteps: 1000
-    shift: 3.0
-    base_shift: 0.5
-    max_shift: 1.15
+# You can override the variant here if needed:
+# model:
+#   variant: "flux1-schnell"  # For FLUX.1-schnell
+#   variant: "flux2-dev"      # For FLUX.2-dev
+#   variant: "flux2-klein-4b" # For FLUX.2-klein-4B

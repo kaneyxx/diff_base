@@ -1,16 +1,26 @@
 # Diffusion Model Training Framework
 
-A unified training framework for diffusion models supporting multiple architectures (SDXL, Flux) and training methods (LoRA, Full Fine-tune, DreamBooth, ControlNet, Textual Inversion).
+A unified training framework for diffusion models supporting multiple architectures (SDXL, FLUX.1, FLUX.2) and training methods (LoRA, Full Fine-tune, DreamBooth, ControlNet, Textual Inversion).
 
 ## Features
 
-- **Multiple Architectures**: SDXL and Flux (DiT) support
+- **Multiple Architectures**: SDXL, FLUX.1 (dev, schnell), and FLUX.2 (dev, klein-4B, klein-9B) support
 - **Training Methods**: LoRA, Full Fine-tuning, DreamBooth, ControlNet, Textual Inversion
 - **Noise Schedulers**: DDPM, Euler, Flow Matching
 - **Data Pipeline**: Aspect ratio bucketing, latent caching, flexible transforms
 - **Configuration-Driven**: YAML configs with inheritance support
 - **Memory Optimized**: Gradient checkpointing, mixed precision training
 - **Checkpoint Management**: Save/load in safetensors format
+
+## Supported Models
+
+| Model | Variants | Text Encoder | Latent Channels | Parameters |
+|-------|----------|--------------|-----------------|------------|
+| SDXL | base, refiner | CLIP-L + CLIP-G | 4 | ~2.6B |
+| FLUX.1 | dev, schnell | T5-XXL + CLIP-L | 16 | ~12B |
+| FLUX.2 | dev | Mistral-3 | 32 | ~32B |
+| FLUX.2 | klein-4B | Qwen3-4B | 128 | ~4B |
+| FLUX.2 | klein-9B | Qwen3-8B | 128 | ~9B |
 
 ## Installation
 
@@ -118,13 +128,23 @@ python scripts/inference.py \
 diff_base/
 ├── configs/                 # YAML configuration files
 │   ├── models/              # Model architecture configs
+│   │   ├── sdxl.yaml
+│   │   ├── flux.yaml        # Alias for flux1_dev
+│   │   ├── flux1_dev.yaml
+│   │   ├── flux1_schnell.yaml
+│   │   ├── flux2_dev.yaml
+│   │   ├── flux2_klein_4b.yaml
+│   │   └── flux2_klein_9b.yaml
 │   ├── training/            # Training method configs
 │   └── experiments/         # Complete experiment configs
 ├── src/
 │   ├── models/              # Model definitions
 │   │   ├── components/      # Shared components (attention, embeddings, etc.)
 │   │   ├── sdxl/            # SDXL architecture
-│   │   └── flux/            # Flux DiT architecture
+│   │   └── flux/            # Flux architectures
+│   │       ├── components/  # Flux-specific shared layers
+│   │       ├── v1/          # FLUX.1 (dev, schnell)
+│   │       └── v2/          # FLUX.2 (dev, klein-4B, klein-9B)
 │   ├── training/            # Training logic
 │   │   └── methods/         # LoRA, ControlNet implementations
 │   ├── data/                # Data pipeline
@@ -146,6 +166,58 @@ diff_base/
 | **DreamBooth** | Personalization with prior preservation |
 | **ControlNet** | Add conditional control to generation |
 | **Textual Inversion** | Learn new concepts via embeddings |
+
+## Using FLUX Models
+
+### FLUX.1 (dev/schnell)
+
+```yaml
+# configs/experiments/flux1_lora.yaml
+_base_:
+  - ../models/flux1_dev.yaml  # or flux1_schnell.yaml
+  - ../training/lora.yaml
+
+model:
+  pretrained_path: "black-forest-labs/FLUX.1-dev"
+
+training:
+  epochs: 50
+  batch_size: 1
+  lora:
+    rank: 16
+```
+
+### FLUX.2 (dev/klein)
+
+```yaml
+# configs/experiments/flux2_klein_lora.yaml
+_base_:
+  - ../models/flux2_klein_4b.yaml  # or flux2_dev.yaml, flux2_klein_9b.yaml
+  - ../training/lora.yaml
+
+model:
+  pretrained_path: "black-forest-labs/FLUX.2-Klein-4B"
+
+training:
+  epochs: 50
+  batch_size: 1
+```
+
+### Programmatic Usage
+
+```python
+from src.models import create_model
+from omegaconf import OmegaConf
+
+# Create FLUX.1-dev model
+config = OmegaConf.create({
+    'model': {
+        'type': 'flux',
+        'variant': 'flux1-dev',  # or flux1-schnell, flux2-dev, flux2-klein-4b, etc.
+    }
+})
+model = create_model(config)
+```
 
 ## Configuration System
 

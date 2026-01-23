@@ -1,0 +1,52 @@
+# FLUX.1-dev Model Configuration
+# 12B parameter model with T5-XXL + CLIP-L text encoders
+# Uses guidance embeddings for classifier-free guidance
+
+model:
+  type: "flux"
+  version: "v1"
+  variant: "flux1-dev"
+
+  # Transformer (DiT) Configuration
+  transformer:
+    in_channels: 64              # 16 latent channels * 4 (packed)
+    hidden_size: 3072
+    num_layers: 19               # Joint/double blocks
+    num_single_layers: 38        # Single blocks
+    attention_head_dim: 128
+    num_attention_heads: 24
+    joint_attention_dim: 4096    # T5 hidden size
+    pooled_projection_dim: 768   # CLIP pooled output
+    guidance_embeds: true        # Enable guidance for CFG
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 16          # FLUX.1 uses 16 channels
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 0.3611
+    shift_factor: 0.1159
+
+  # Text Encoder Configuration
+  text_encoder:
+    type: "t5_clip"
+    t5:
+      model_id: "google/t5-v1_1-xxl"
+      hidden_size: 4096
+      num_layers: 24
+      max_position_embeddings: 512
+    clip_l:
+      model_id: "openai/clip-vit-large-patch14"
+      hidden_size: 768
+      num_layers: 12
+      max_position_embeddings: 77
+
+  # Scheduler Configuration (Flow Matching)
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 3.0
+    base_shift: 0.5
+    max_shift: 1.15

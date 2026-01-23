@@ -412,3 +412,30 @@ class MLPEmbedder(nn.Module):
         x = self.silu(x)
         x = self.out_layer(x)
         return x
+
+
+def get_timestep_embedding(
+    timestep: torch.Tensor,
+    dim: int = 256,
+    max_period: int = 10000,
+) -> torch.Tensor:
+    """Get sinusoidal timestep embedding.
+
+    Args:
+        timestep: Timestep values [B].
+        dim: Embedding dimension.
+        max_period: Maximum period for sinusoidal embeddings.
+
+    Returns:
+        Embeddings [B, dim].
+    """
+    half_dim = dim // 2
+    emb = math.log(max_period) / (half_dim - 1)
+    emb = torch.exp(torch.arange(half_dim, device=timestep.device) * -emb)
+    emb = timestep[:, None].float() * emb[None, :]
+    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+
+    if dim % 2 == 1:
+        emb = torch.nn.functional.pad(emb, (0, 1))
+
+    return emb

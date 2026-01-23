@@ -1,0 +1,54 @@
+# FLUX.1-schnell Model Configuration
+# 12B parameter distilled model (same architecture as dev)
+# Guidance disabled - optimized for fast 4-step generation
+
+model:
+  type: "flux"
+  version: "v1"
+  variant: "flux1-schnell"
+
+  # Transformer (DiT) Configuration
+  # Same architecture as dev, just different training
+  transformer:
+    in_channels: 64              # 16 latent channels * 4 (packed)
+    hidden_size: 3072
+    num_layers: 19               # Joint/double blocks
+    num_single_layers: 38        # Single blocks
+    attention_head_dim: 128
+    num_attention_heads: 24
+    joint_attention_dim: 4096    # T5 hidden size
+    pooled_projection_dim: 768   # CLIP pooled output
+    guidance_embeds: false       # No guidance for schnell
+
+  # VAE Configuration (same as dev)
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 16
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 0.3611
+    shift_factor: 0.1159
+
+  # Text Encoder Configuration (same as dev)
+  text_encoder:
+    type: "t5_clip"
+    t5:
+      model_id: "google/t5-v1_1-xxl"
+      hidden_size: 4096
+      num_layers: 24
+      max_position_embeddings: 512
+    clip_l:
+      model_id: "openai/clip-vit-large-patch14"
+      hidden_size: 768
+      num_layers: 12
+      max_position_embeddings: 77
+
+  # Scheduler Configuration
+  # Schnell uses rectified flow optimized for 4 steps
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 1.0                   # Lower shift for schnell
+    base_shift: 0.5
+    max_shift: 1.15
