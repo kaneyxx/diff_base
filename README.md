@@ -1,10 +1,10 @@
 # Diffusion Model Training Framework
 
-A unified training framework for diffusion models supporting multiple architectures (SDXL, FLUX.1, FLUX.2) and training methods (LoRA, Full Fine-tune, DreamBooth, ControlNet, Textual Inversion).
+A unified training framework for diffusion models supporting multiple architectures (SDXL, SD3.5, FLUX.1, FLUX.2) and training methods (LoRA, Full Fine-tune, DreamBooth, ControlNet, Textual Inversion).
 
 ## Features
 
-- **Multiple Architectures**: SDXL, FLUX.1 (dev, schnell), and FLUX.2 (dev, klein-4B, klein-9B) support
+- **Multiple Architectures**: SDXL, SD3.5 (Large, Large-Turbo, Medium), FLUX.1 (dev, schnell), and FLUX.2 (dev, klein-4B, klein-9B) support
 - **Training Methods**: LoRA, Full Fine-tuning, DreamBooth, ControlNet, Textual Inversion
 - **Noise Schedulers**: DDPM, Euler, Flow Matching
 - **Data Pipeline**: Aspect ratio bucketing, latent caching, flexible transforms
@@ -17,6 +17,9 @@ A unified training framework for diffusion models supporting multiple architectu
 | Model | Variants | Text Encoder | Latent Channels | Parameters |
 |-------|----------|--------------|-----------------|------------|
 | SDXL | base, refiner | CLIP-L + CLIP-G | 4 | ~2.6B |
+| SD3.5 | Large | CLIP-L + CLIP-G + T5-XXL | 16 | ~8B |
+| SD3.5 | Large-Turbo | CLIP-L + CLIP-G + T5-XXL | 16 | ~8B |
+| SD3.5 | Medium | CLIP-L + CLIP-G + T5-XXL | 16 | ~2.5B |
 | FLUX.1 | dev, schnell | T5-XXL + CLIP-L | 16 | ~12B |
 | FLUX.2 | dev | Mistral-3 | 32 | ~32B |
 | FLUX.2 | klein-4B | Qwen3-4B | 128 | ~4B |
@@ -129,6 +132,9 @@ diff_base/
 ├── configs/                 # YAML configuration files
 │   ├── models/              # Model architecture configs
 │   │   ├── sdxl.yaml
+│   │   ├── sd3_large.yaml
+│   │   ├── sd3_large_turbo.yaml
+│   │   ├── sd3_medium.yaml
 │   │   ├── flux.yaml        # Alias for flux1_dev
 │   │   ├── flux1_dev.yaml
 │   │   ├── flux1_schnell.yaml
@@ -141,6 +147,8 @@ diff_base/
 │   ├── models/              # Model definitions
 │   │   ├── components/      # Shared components (attention, embeddings, etc.)
 │   │   ├── sdxl/            # SDXL architecture
+│   │   ├── sd3/             # SD3.5 architecture (MM-DiT)
+│   │   │   └── components/  # SD3-specific layers (QKNorm, JointBlock, etc.)
 │   │   └── flux/            # Flux architectures
 │   │       ├── components/  # Flux-specific shared layers
 │   │       ├── v1/          # FLUX.1 (dev, schnell)
@@ -166,6 +174,44 @@ diff_base/
 | **DreamBooth** | Personalization with prior preservation |
 | **ControlNet** | Add conditional control to generation |
 | **Textual Inversion** | Learn new concepts via embeddings |
+
+## Using SD3.5 Models
+
+SD3.5 uses the MM-DiT (Multimodal Diffusion Transformer) architecture with triple text encoders (CLIP-L, OpenCLIP-G, T5-XXL).
+
+### SD3.5 Variants
+
+```yaml
+# configs/experiments/sd3_lora.yaml
+_base_:
+  - ../models/sd3_large.yaml  # or sd3_medium.yaml, sd3_large_turbo.yaml
+  - ../training/lora.yaml
+
+model:
+  pretrained_path: "stabilityai/stable-diffusion-3.5-large"
+
+training:
+  epochs: 50
+  batch_size: 1
+  lora:
+    rank: 16
+```
+
+### Programmatic Usage (SD3.5)
+
+```python
+from src.models import create_model
+from omegaconf import OmegaConf
+
+# Create SD3.5-Medium model
+config = OmegaConf.create({
+    'model': {
+        'type': 'sd3',
+        'variant': 'medium',  # or 'large', 'large-turbo'
+    }
+})
+model = create_model(config)
+```
 
 ## Using FLUX Models
 
