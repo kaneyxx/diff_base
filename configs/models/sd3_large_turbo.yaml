@@ -1,0 +1,58 @@
+# SD3.5-Large-Turbo Model Configuration
+# Same architecture as SD3.5-Large (~8B params) but tuned for faster inference
+# Uses MM-DiT (Multimodal Diffusion Transformer) architecture
+
+model:
+  type: "sd3"
+  variant: "large-turbo"
+
+  # Transformer (MM-DiT) Configuration
+  # Same as SD3.5-Large
+  transformer:
+    depth: 38
+    hidden_size: 2432              # 64 * 38
+    num_heads: 38                  # One head per layer
+    patch_size: 2
+    in_channels: 16
+    pos_embed_max_size: 192
+    qk_norm: true
+    context_dim: 4096
+    pooled_projection_dim: 2048
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 16
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 1.5305
+    shift_factor: 0.0609
+    use_quant_conv: true
+
+  # Triple Text Encoder Configuration
+  text_encoder:
+    type: "triple"
+    clip_l:
+      model_id: "openai/clip-vit-large-patch14"
+      hidden_size: 768
+      num_layers: 12
+      max_length: 77
+    clip_g:
+      model_id: "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
+      hidden_size: 1280
+      num_layers: 32
+      max_length: 77
+    t5:
+      model_id: "google/t5-v1_1-xxl"
+      hidden_size: 4096
+      num_layers: 24
+      max_length: 512
+
+  # Scheduler Configuration (Turbo uses lower shift)
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 1.0                     # Lower shift for turbo inference
+    base_shift: 0.5
+    max_shift: 1.15

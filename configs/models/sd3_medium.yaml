@@ -1,0 +1,57 @@
+# SD3.5-Medium Model Configuration
+# ~2.5B parameter model - smaller and faster than SD3.5-Large
+# Uses MM-DiT (Multimodal Diffusion Transformer) architecture
+
+model:
+  type: "sd3"
+  variant: "medium"
+
+  # Transformer (MM-DiT) Configuration
+  transformer:
+    depth: 24
+    hidden_size: 1536              # 64 * 24
+    num_heads: 24                  # One head per layer
+    patch_size: 2
+    in_channels: 16
+    pos_embed_max_size: 192
+    qk_norm: true
+    context_dim: 4096              # Still uses T5-XXL
+    pooled_projection_dim: 2048    # CLIP-L (768) + CLIP-G (1280)
+
+  # VAE Configuration (same as Large)
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 16
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 1.5305
+    shift_factor: 0.0609
+    use_quant_conv: true
+
+  # Triple Text Encoder Configuration (same as Large)
+  text_encoder:
+    type: "triple"
+    clip_l:
+      model_id: "openai/clip-vit-large-patch14"
+      hidden_size: 768
+      num_layers: 12
+      max_length: 77
+    clip_g:
+      model_id: "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
+      hidden_size: 1280
+      num_layers: 32
+      max_length: 77
+    t5:
+      model_id: "google/t5-v1_1-xxl"
+      hidden_size: 4096
+      num_layers: 24
+      max_length: 512
+
+  # Scheduler Configuration (Flow Matching)
+  scheduler:
+    type: "flow_matching_euler"
+    num_train_timesteps: 1000
+    shift: 3.0
+    base_shift: 0.5
+    max_shift: 1.15

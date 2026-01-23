@@ -9,6 +9,7 @@ from .base import BaseDiffusionModel
 if TYPE_CHECKING:
     from .sdxl import SDXLModel
     from .flux import FluxModel, Flux1Model, Flux2Model
+    from .sd3 import SD3Model
 
 
 def create_model(config: DictConfig) -> BaseDiffusionModel:
@@ -42,6 +43,18 @@ def create_model(config: DictConfig) -> BaseDiffusionModel:
         # FLUX.2 klein-4b
         config.model.type = "flux"
         config.model.variant = "flux2-klein-4b"  # or "klein-4b"
+
+        # SD3.5-Large
+        config.model.type = "sd3"
+        config.model.variant = "large"
+
+        # SD3.5-Large-Turbo
+        config.model.type = "sd3"
+        config.model.variant = "large-turbo"
+
+        # SD3.5-Medium
+        config.model.type = "sd3"
+        config.model.variant = "medium"
     """
     model_type = config.model.type
 
@@ -52,10 +65,14 @@ def create_model(config: DictConfig) -> BaseDiffusionModel:
         # Use the Flux factory which handles all variants
         from .flux import create_flux_model
         model = create_flux_model(config.model)
+    elif model_type == "sd3":
+        # Use the SD3 factory which handles all variants
+        from .sd3 import create_sd3_model
+        model = create_sd3_model(config.model)
     else:
         raise ValueError(
             f"Unknown model type: {model_type}. "
-            f"Supported types: ['sdxl', 'flux']"
+            f"Supported types: ['sdxl', 'flux', 'sd3']"
         )
 
     # Load pretrained weights if specified
@@ -77,8 +94,20 @@ def get_available_flux_variants() -> dict[str, tuple[str, str]]:
     return get_available_variants()
 
 
+def get_available_sd3_variants() -> dict[str, dict]:
+    """Get all available SD3 model variants.
+
+    Returns:
+        Dictionary mapping variant names to configuration dictionaries.
+        Available variants: "large", "large-turbo", "medium"
+    """
+    from .sd3 import get_available_variants
+    return get_available_variants()
+
+
 __all__ = [
     "BaseDiffusionModel",
     "create_model",
     "get_available_flux_variants",
+    "get_available_sd3_variants",
 ]
