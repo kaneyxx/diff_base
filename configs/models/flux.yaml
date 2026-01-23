@@ -1,0 +1,46 @@
+# Flux Model Configuration
+
+model:
+  type: "flux"
+  variant: "dev"  # or "schnell"
+
+  # Transformer (DiT) Configuration
+  transformer:
+    in_channels: 64
+    hidden_size: 3072
+    num_layers: 19
+    num_single_layers: 38
+    attention_head_dim: 128
+    num_attention_heads: 24
+    joint_attention_dim: 4096
+    pooled_projection_dim: 768
+    guidance_embeds: true  # false for schnell
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 16
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    scaling_factor: 0.3611
+    shift_factor: 0.1159
+
+  # Text Encoder Configuration
+  text_encoder:
+    t5:
+      hidden_size: 4096
+      num_layers: 24
+      max_position_embeddings: 512
+    clip_l:
+      hidden_size: 768
+      num_layers: 12
+      max_position_embeddings: 77
+
+  # Scheduler Configuration (Flow Matching)
+  scheduler:
+    type: "flow_matching"
+    num_train_timesteps: 1000
+    shift: 3.0
+    base_shift: 0.5
+    max_shift: 1.15

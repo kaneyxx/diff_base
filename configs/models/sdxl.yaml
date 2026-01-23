@@ -1,0 +1,45 @@
+# SDXL Model Configuration
+
+model:
+  type: "sdxl"
+
+  # UNet Configuration
+  unet:
+    in_channels: 4
+    out_channels: 4
+    model_channels: 320
+    attention_head_dim: 64
+    cross_attention_dim: 2048
+    block_out_channels: [320, 640, 1280]
+    layers_per_block: 2
+    transformer_layers_per_block: [1, 2, 10]
+
+  # VAE Configuration
+  vae:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 4
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    norm_num_groups: 32
+    scaling_factor: 0.13025
+
+  # Text Encoder Configuration
+  text_encoder:
+    clip_l:
+      hidden_size: 768
+      num_layers: 12
+      max_position_embeddings: 77
+    clip_g:
+      hidden_size: 1280
+      num_layers: 32
+      max_position_embeddings: 77
+
+  # Scheduler Configuration
+  scheduler:
+    type: "ddpm"
+    num_train_timesteps: 1000
+    beta_start: 0.00085
+    beta_end: 0.012
+    beta_schedule: "scaled_linear"
+    prediction_type: "epsilon"  # or "v_prediction"

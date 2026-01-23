@@ -1,0 +1,35 @@
+# Textual Inversion Training Configuration
+
+training:
+  method: "textual_inversion"
+
+  # Textual Inversion Parameters
+  textual_inversion:
+    placeholder_token: "<concept>"
+    initializer_token: "photo"
+    num_vectors: 1  # Number of vectors per concept
+
+  # Optimizer
+  optimizer:
+    type: "adamw"
+    lr: 5.0e-4
+    betas: [0.9, 0.999]
+    weight_decay: 0.0  # No weight decay for textual inversion
+    eps: 1.0e-8
+
+  # Learning Rate Scheduler
+  lr_scheduler:
+    type: "constant"
+    warmup_steps: 100
+
+  # Loss Configuration
+  loss:
+    type: "mse"
+    snr_gamma: null
+
+  # Training Settings
+  batch_size: 4
+  gradient_accumulation: 1
+  epochs: 3000
+  max_grad_norm: 1.0
+  save_every_n_epochs: 500

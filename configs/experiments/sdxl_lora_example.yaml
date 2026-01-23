@@ -1,0 +1,54 @@
+# Example: SDXL LoRA Training
+
+# Inherit from base configs
+_base_:
+  - ../models/sdxl.yaml
+  - ../training/lora.yaml
+
+# Experiment Metadata
+experiment:
+  name: "sdxl-lora-character"
+  output_dir: "./outputs/sdxl_lora_character"
+  seed: 42
+
+# Model Overrides
+model:
+  pretrained_path: "/path/to/stabilityai/stable-diffusion-xl-base-1.0"
+  dtype: "bfloat16"
+
+# Training Overrides
+training:
+  epochs: 100
+  batch_size: 4
+  gradient_accumulation: 2
+  learning_rate: 1.0e-4
+
+  lora:
+    rank: 32
+    alpha: 32
+    train_text_encoder: false
+
+# Dataset Configuration
+data:
+  train_path: "/path/to/dataset"
+  resolution: 1024
+  bucket_resolution_steps: 64
+  cache_latents: true
+  cache_dir: "./cache/latents"
+  flip_augment: true
+  num_workers: 4
+
+# Hardware Configuration
+hardware:
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+  compile: false  # torch.compile
+
+# Logging Configuration
+logging:
+  wandb:
+    enabled: false
+    project: "diff-base"
+    tags: ["sdxl", "lora"]
+  tensorboard:
+    enabled: true

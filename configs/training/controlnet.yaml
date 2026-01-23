@@ -1,0 +1,34 @@
+# ControlNet Training Configuration
+
+training:
+  method: "controlnet"
+
+  # ControlNet Parameters
+  controlnet:
+    conditioning_type: "canny"  # canny, depth, pose, segmentation, etc.
+    conditioning_scale: 1.0
+
+  # Optimizer
+  optimizer:
+    type: "adamw"
+    lr: 1.0e-5
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+
+  # Learning Rate Scheduler
+  lr_scheduler:
+    type: "constant"
+    warmup_steps: 500
+
+  # Loss Configuration
+  loss:
+    type: "mse"
+    snr_gamma: null
+
+  # Training Settings
+  batch_size: 4
+  gradient_accumulation: 2
+  epochs: 100
+  max_grad_norm: 1.0
+  save_every_n_epochs: 10

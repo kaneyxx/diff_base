@@ -1,0 +1,38 @@
+# DreamBooth Training Configuration
+
+training:
+  method: "dreambooth"
+
+  # DreamBooth Parameters
+  dreambooth:
+    instance_prompt: "a photo of sks dog"
+    class_prompt: "a photo of dog"
+    num_class_images: 200
+    prior_preservation_weight: 1.0
+    train_text_encoder: true
+
+  # Optimizer
+  optimizer:
+    type: "adamw"
+    lr: 5.0e-6
+    text_encoder_lr: 5.0e-6
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+
+  # Learning Rate Scheduler
+  lr_scheduler:
+    type: "constant"
+    warmup_steps: 100
+
+  # Loss Configuration
+  loss:
+    type: "mse"
+    snr_gamma: null  # Typically not used for DreamBooth
+
+  # Training Settings
+  batch_size: 1
+  gradient_accumulation: 4
+  epochs: 800
+  max_grad_norm: 1.0
+  save_every_n_epochs: 200

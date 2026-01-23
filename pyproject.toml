@@ -1,0 +1,110 @@
+[project]
+name = "diff-base"
+version = "0.1.0"
+description = "Unified diffusion model training framework for SDXL and Flux"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "diff-base contributors"}
+]
+keywords = ["diffusion", "training", "sdxl", "flux", "lora", "dreambooth"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "safetensors>=0.4.0",
+    "accelerate>=0.25.0",
+    "omegaconf>=2.3.0",
+    "pydantic>=2.0.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "transformers>=4.36.0",
+    "tokenizers>=0.15.0",
+    "sentencepiece>=0.1.99",
+    "peft>=0.7.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.0.0",
+]
+logging = [
+    "wandb>=0.16.0",
+    "tensorboard>=2.15.0",
+]
+all = [
+    "diff-base[dev,logging]",
+]
+
+[project.scripts]
+diff-train = "scripts.train:main"
+diff-inference = "scripts.inference:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line length handled by black
+    "B008",  # function calls in argument defaults
+]
+
+[tool.ruff.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
