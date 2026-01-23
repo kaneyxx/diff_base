@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.components.attention import SelfAttention, CrossAttention, JointAttention
 from src.models.components.embeddings import TimestepEmbedding, Timesteps, get_timestep_embedding
 from src.models.components.resnet import ResnetBlock2D, Downsample2D, Upsample2D
-from src.models.components.transformer import FeedForward, BasicTransformerBlock
+from src.models.components.transformer import FeedForward
+from src.models.components.attention import BasicTransformerBlock
 
 
 class TestAttention:
@@ -272,6 +273,230 @@ class TestFluxComponents:
         from src.models.flux.vae import FluxVAE
 
         assert FluxVAE is not None
+
+
+class TestSD3Components:
+    """Tests for SD3-specific components."""
+
+    def test_sd3_components_import(self):
+        """Test that SD3 components can be imported."""
+        from src.models.sd3.components import (
+            RMSNorm,
+            AdaLayerNormContinuous,
+            AdaLayerNormZero,
+            FeedForward,
+            PatchEmbed,
+            CombinedTimestepTextProjEmbeddings,
+            QKNorm,
+            JointTransformerBlock,
+        )
+
+        assert RMSNorm is not None
+        assert AdaLayerNormContinuous is not None
+        assert AdaLayerNormZero is not None
+        assert FeedForward is not None
+        assert PatchEmbed is not None
+        assert CombinedTimestepTextProjEmbeddings is not None
+        assert QKNorm is not None
+        assert JointTransformerBlock is not None
+
+    def test_sd3_transformer_import(self):
+        """Test that SD3 transformer can be imported."""
+        from src.models.sd3.mmdit import SD3Transformer, SD3_VARIANT_CONFIGS
+
+        assert SD3Transformer is not None
+        assert "large" in SD3_VARIANT_CONFIGS
+        assert "large-turbo" in SD3_VARIANT_CONFIGS
+        assert "medium" in SD3_VARIANT_CONFIGS
+
+    def test_sd3_vae_import(self):
+        """Test that SD3 VAE can be imported."""
+        from src.models.sd3.vae import SD3VAE
+
+        assert SD3VAE is not None
+
+    def test_sd3_text_encoder_import(self):
+        """Test that SD3 text encoder can be imported."""
+        from src.models.sd3.text_encoder import SD3TextEncoders
+
+        assert SD3TextEncoders is not None
+
+    def test_sd3_model_import(self):
+        """Test that SD3 model can be imported."""
+        from src.models.sd3 import SD3Model, create_sd3_model, get_available_variants
+
+        assert SD3Model is not None
+        assert create_sd3_model is not None
+        variants = get_available_variants()
+        assert "large" in variants
+        assert "medium" in variants
+
+    def test_sd3_in_model_registry(self):
+        """Test that SD3 is available via main model factory."""
+        from src.models import get_available_sd3_variants
+
+        variants = get_available_sd3_variants()
+        assert "large" in variants
+        assert "large-turbo" in variants
+        assert "medium" in variants
+
+    def test_sd3_rms_norm(self):
+        """Test RMSNorm forward pass."""
+        from src.models.sd3.components import RMSNorm
+
+        batch_size = 2
+        seq_len = 16
+        dim = 64
+
+        norm = RMSNorm(dim)
+        x = torch.randn(batch_size, seq_len, dim)
+
+        output = norm(x)
+
+        assert output.shape == (batch_size, seq_len, dim)
+
+    def test_sd3_qk_norm(self):
+        """Test QKNorm forward pass."""
+        from src.models.sd3.components import QKNorm
+
+        batch_size = 2
+        num_heads = 4
+        seq_len = 16
+        head_dim = 64
+
+        qk_norm = QKNorm(head_dim)
+        q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+        k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+        q_out, k_out = qk_norm(q, k)
+
+        assert q_out.shape == q.shape
+        assert k_out.shape == k.shape
+
+    def test_sd3_patch_embed(self):
+        """Test PatchEmbed forward pass."""
+        from src.models.sd3.components import PatchEmbed
+
+        batch_size = 2
+        in_channels = 16
+        hidden_size = 256
+        patch_size = 2
+        height, width = 32, 32
+
+        patch_embed = PatchEmbed(
+            patch_size=patch_size,
+            in_channels=in_channels,
+            hidden_size=hidden_size,
+        )
+        x = torch.randn(batch_size, in_channels, height, width)
+
+        output = patch_embed(x)
+
+        expected_num_patches = (height // patch_size) * (width // patch_size)
+        assert output.shape == (batch_size, expected_num_patches, hidden_size)
+
+    def test_sd3_joint_transformer_block(self):
+        """Test JointTransformerBlock forward pass."""
+        from src.models.sd3.components import JointTransformerBlock
+
+        batch_size = 2
+        img_seq_len = 64
+        txt_seq_len = 32
+        hidden_size = 256
+        context_dim = 512
+        num_heads = 4
+
+        block = JointTransformerBlock(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            context_dim=context_dim,
+        )
+
+        img = torch.randn(batch_size, img_seq_len, hidden_size)
+        txt = torch.randn(batch_size, txt_seq_len, context_dim)
+        temb = torch.randn(batch_size, hidden_size)
+
+        img_out, txt_out = block(img, txt, temb)
+
+        assert img_out.shape == (batch_size, img_seq_len, hidden_size)
+        assert txt_out.shape == (batch_size, txt_seq_len, context_dim)
+
+
+class TestSD3Model:
+    """Tests for SD3 model creation and forward pass."""
+
+    def test_sd3_medium_creation(self):
+        """Test SD3.5-Medium model creation."""
+        from src.models import create_model
+
+        config = OmegaConf.create({
+            'model': {
+                'type': 'sd3',
+                'variant': 'medium',
+                'transformer': {
+                    'depth': 24,
+                    'hidden_size': 1536,
+                    'num_heads': 24,
+                    'patch_size': 2,
+                    'in_channels': 16,
+                    'context_dim': 4096,
+                    'pooled_projection_dim': 2048,
+                },
+                'vae': {
+                    'latent_channels': 16,
+                },
+                'text_encoder': {},
+            }
+        })
+
+        model = create_model(config)
+
+        assert model.variant == "medium"
+        assert model.transformer.depth == 24
+        assert model.transformer.hidden_size == 1536
+
+    def test_sd3_medium_forward(self):
+        """Test SD3.5-Medium forward pass."""
+        from src.models import create_model
+
+        config = OmegaConf.create({
+            'model': {
+                'type': 'sd3',
+                'variant': 'medium',
+                'transformer': {
+                    'depth': 24,
+                    'hidden_size': 1536,
+                    'num_heads': 24,
+                    'patch_size': 2,
+                    'in_channels': 16,
+                    'context_dim': 4096,
+                    'pooled_projection_dim': 2048,
+                },
+                'vae': {
+                    'latent_channels': 16,
+                },
+                'text_encoder': {},
+            }
+        })
+
+        model = create_model(config)
+
+        # Small input for testing
+        batch_size = 1
+        latents = torch.randn(batch_size, 16, 8, 8)
+        timesteps = torch.tensor([500.0])
+        encoder_hidden_states = torch.randn(batch_size, 64, 4096)
+        pooled_projections = torch.randn(batch_size, 2048)
+
+        with torch.no_grad():
+            output = model(
+                latents=latents,
+                timesteps=timesteps,
+                encoder_hidden_states=encoder_hidden_states,
+                pooled_projections=pooled_projections,
+            )
+
+        assert output.shape == latents.shape
 
 
 if __name__ == "__main__":
