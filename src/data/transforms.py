@@ -245,3 +245,32 @@ def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
             tensor.permute(1, 2, 0).cpu().numpy(),
             mode="RGB"
         )
+
+
+def pil_to_tensor(image: Image.Image) -> torch.Tensor:
+    """Convert PIL Image to tensor.
+
+    Args:
+        image: PIL Image (RGB or grayscale).
+
+    Returns:
+        Image tensor [C, H, W] in range [-1, 1].
+    """
+    import numpy as np
+
+    # Convert to numpy array
+    if image.mode == "L":
+        # Grayscale
+        arr = np.array(image, dtype=np.float32) / 255.0
+        tensor = torch.from_numpy(arr).unsqueeze(0)
+    else:
+        # RGB - ensure RGB mode
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        arr = np.array(image, dtype=np.float32) / 255.0
+        tensor = torch.from_numpy(arr).permute(2, 0, 1)
+
+    # Normalize to [-1, 1]
+    tensor = tensor * 2.0 - 1.0
+
+    return tensor

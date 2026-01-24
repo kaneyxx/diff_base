@@ -4,10 +4,14 @@ FLUX.2 variants:
 - dev: 32B parameters, Mistral-3 text encoder, 32 latent channels
 - klein-4b: ~4B parameters, Qwen3-4B text encoder, 128 latent channels
 - klein-9b: ~9B parameters, Qwen3-8B text encoder, 128 latent channels
+
+Image Editing Support:
+- Kontext Mode: Reference image editing via encode_reference_images()
+- Fill Mode: Inpainting via encode_reference_images() with mask
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -18,6 +22,12 @@ from ...base import BaseDiffusionModel
 from .transformer import Flux2Transformer
 from .vae import Flux2VAE
 from .text_encoder import Flux2TextEncoders
+from .conditioning import (
+    prepare_kontext_conditioning,
+    prepare_fill_conditioning,
+    rearrange_latent_to_sequence,
+    get_fill_extra_channels,
+)
 from ....utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +77,9 @@ class Flux2Model(BaseDiffusionModel):
         encoder_hidden_states: torch.Tensor,
         pooled_projections: Optional[torch.Tensor] = None,
         guidance: Optional[torch.Tensor] = None,
+        img_cond_seq: Optional[torch.Tensor] = None,
+        img_cond_seq_ids: Optional[torch.Tensor] = None,
+        img_cond: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through Transformer.
@@ -77,6 +90,11 @@ class Flux2Model(BaseDiffusionModel):
             encoder_hidden_states: Text embeddings [B, txt_seq, dim].
             pooled_projections: Pooled text embeddings [B, pool_dim].
             guidance: Optional guidance scale [B].
+            img_cond_seq: Kontext conditioning sequence [B, ref_seq, channels].
+                Reference image encoded and patchified.
+            img_cond_seq_ids: Position IDs for Kontext [B, ref_seq, 3].
+            img_cond: Fill conditioning [B, seq, channels + mask_channels].
+                Masked image + mask for inpainting.
             **kwargs: Additional arguments.
 
         Returns:
@@ -93,6 +111,9 @@ class Flux2Model(BaseDiffusionModel):
             encoder_hidden_states=encoder_hidden_states,
             pooled_projections=pooled_projections,
             guidance=guidance,
+            img_cond_seq=img_cond_seq,
+            img_cond_seq_ids=img_cond_seq_ids,
+            img_cond=img_cond,
         )
 
     def encode_text(
@@ -139,6 +160,83 @@ class Flux2Model(BaseDiffusionModel):
         with torch.no_grad():
             image = self.vae.decode_from_latent(latent)
         return image
+
+    def encode_reference_images(
+        self,
+        images: torch.Tensor,
+        mode: Literal["kontext", "fill"] = "kontext",
+        mask: Optional[torch.Tensor] = None,
+        patch_size: int = 2,
+    ) -> Dict[str, torch.Tensor]:
+        """Encode reference images for conditioning.
+
+        This method prepares reference images for use with FLUX.2 image editing:
+
+        Kontext Mode:
+        - Encodes reference images via VAE
+        - Converts to sequence format with position IDs (ref_image_id=1)
+        - Returns dict with 'img_cond_seq' and 'img_cond_seq_ids'
+
+        Fill Mode:
+        - Applies mask to reference image (keeps unmasked regions)
+        - Encodes masked image via VAE
+        - Concatenates latent and mask sequences along channel dim
+        - Returns dict with 'img_cond'
+
+        Args:
+            images: Reference images [B, 3, H, W] in range [-1, 1].
+            mode: Editing mode - "kontext" or "fill".
+            mask: For Fill mode, binary mask [B, 1, H, W] where 1 = inpaint.
+            patch_size: Patch size for sequence conversion (default 2).
+
+        Returns:
+            Dictionary containing conditioning tensors:
+            - Kontext: {'img_cond_seq': ..., 'img_cond_seq_ids': ...}
+            - Fill: {'img_cond': ...}
+
+        Example:
+            >>> # Kontext mode
+            >>> cond = model.encode_reference_images(ref_images, mode="kontext")
+            >>> output = model(latents, timesteps, text_emb, **cond)
+            >>>
+            >>> # Fill mode
+            >>> cond = model.encode_reference_images(ref_images, mode="fill", mask=mask)
+            >>> output = model(latents, timesteps, text_emb, **cond)
+        """
+        device = images.device
+        dtype = images.dtype
+
+        if mode == "kontext":
+            img_cond_seq, img_cond_seq_ids = prepare_kontext_conditioning(
+                reference_images=images,
+                vae=self.vae,
+                device=device,
+                dtype=dtype,
+                patch_size=patch_size,
+            )
+            return {
+                "img_cond_seq": img_cond_seq,
+                "img_cond_seq_ids": img_cond_seq_ids,
+            }
+
+        elif mode == "fill":
+            if mask is None:
+                raise ValueError("Fill mode requires a mask tensor")
+
+            img_cond = prepare_fill_conditioning(
+                reference_image=images,
+                mask=mask,
+                vae=self.vae,
+                device=device,
+                dtype=dtype,
+                patch_size=patch_size,
+            )
+            return {
+                "img_cond": img_cond,
+            }
+
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Expected 'kontext' or 'fill'.")
 
     def _load_diffusers_checkpoint(self, path: Path) -> None:
         """Load from diffusers directory format.

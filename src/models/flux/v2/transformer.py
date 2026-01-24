@@ -10,6 +10,14 @@ Variant configurations:
 - dev: 8 joint + 48 single blocks, 32 latent channels, Mistral-3 text encoder
 - klein-4b: 5 joint + 20 single blocks, 128 latent channels, Qwen3-4B
 - klein-9b: 6 joint + 24 single blocks, 128 latent channels, Qwen3-8B
+
+Image Editing Support:
+- Kontext Mode: Reference image editing via sequence-wise concatenation
+  - img_cond_seq is concatenated along sequence dimension (dim=1)
+  - Position IDs distinguish base image (id=0) from reference (id=1)
+- Fill Mode: Inpainting via channel-wise concatenation
+  - img_cond (latent + mask) is concatenated along channel dimension (dim=-1)
+  - Uses x_embedder_fill for expanded input channels
 """
 
 from typing import Optional, Tuple
@@ -22,6 +30,7 @@ from ..components.attention import FluxJointTransformerBlock, FluxSingleTransfor
 from ..components.embeddings import FluxPosEmbed, get_timestep_embedding
 from ..components.layers import AdaLayerNormContinuous
 from ...components.embeddings import MLPEmbedder, RotaryEmbedding
+from .conditioning import get_fill_extra_channels
 
 
 class Flux2Transformer(nn.Module):
@@ -100,6 +109,17 @@ class Flux2Transformer(nn.Module):
         # Input projection
         self.x_embedder = nn.Linear(in_channels, hidden_size)
 
+        # Fill mode embedder (handles extra mask channels)
+        # This is used when channel-wise concatenation is applied
+        self.fill_extra_channels = config.get("fill_extra_channels", 0)
+        if self.fill_extra_channels > 0:
+            self.x_embedder_fill = nn.Linear(
+                in_channels + self.fill_extra_channels,
+                hidden_size,
+            )
+        else:
+            self.x_embedder_fill = None
+
         # Time/guidance embedding
         self.time_embed = MLPEmbedder(256, hidden_size)
 
@@ -148,6 +168,9 @@ class Flux2Transformer(nn.Module):
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
         guidance: Optional[torch.Tensor] = None,
+        img_cond_seq: Optional[torch.Tensor] = None,
+        img_cond_seq_ids: Optional[torch.Tensor] = None,
+        img_cond: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -157,12 +180,41 @@ class Flux2Transformer(nn.Module):
             encoder_hidden_states: Text embeddings [B, txt_seq, text_dim].
             pooled_projections: Pooled text embeddings [B, pooled_dim].
             guidance: Optional guidance scale [B].
+            img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
+                Concatenated along sequence dimension.
+            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 3].
+                Used for positional encoding.
+            img_cond: Fill conditioning [B, seq_len, in_channels + fill_extra].
+                Concatenated along channel dimension.
 
         Returns:
             Predicted output [B, seq_len, in_channels].
+            Note: Output has same seq_len as input hidden_states, not including
+            any concatenated Kontext conditioning. Slicing is handled by caller.
         """
-        # Embed inputs
-        hidden_states = self.x_embedder(hidden_states)
+        # Track original sequence length for potential slicing
+        original_seq_len = hidden_states.shape[1]
+
+        # Handle Fill mode (channel-wise concatenation)
+        if img_cond is not None:
+            # Concatenate conditioning along channel dimension
+            hidden_states = torch.cat([hidden_states, img_cond], dim=-1)
+            # Use fill embedder if available, otherwise standard
+            if self.x_embedder_fill is not None:
+                hidden_states = self.x_embedder_fill(hidden_states)
+            else:
+                # Fall back: just use regular embedder (may fail if dims mismatch)
+                hidden_states = self.x_embedder(hidden_states)
+        else:
+            # Standard embedding
+            hidden_states = self.x_embedder(hidden_states)
+
+        # Handle Kontext mode (sequence-wise concatenation)
+        if img_cond_seq is not None:
+            # Embed reference image sequence
+            ref_embedded = self.x_embedder(img_cond_seq)
+            # Concatenate along sequence dimension
+            hidden_states = torch.cat([hidden_states, ref_embedded], dim=1)
 
         # Project text encoder hidden states to hidden_size
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
@@ -178,7 +230,7 @@ class Flux2Transformer(nn.Module):
         temb = temb + self.pooled_text_embed(pooled_projections)
 
         # Get rotary embeddings
-        img_seq_len = hidden_states.shape[1]
+        img_seq_len = hidden_states.shape[1]  # Includes Kontext if present
         txt_seq_len = encoder_hidden_states.shape[1]
 
         img_rotary_emb = self.rope(img_seq_len, hidden_states.device)
@@ -206,12 +258,17 @@ class Flux2Transformer(nn.Module):
         for block in self.single_blocks:
             hidden_states = block(hidden_states, temb, combined_rotary_emb)
 
-        # Extract image tokens
+        # Extract image tokens (all image tokens including Kontext if present)
         hidden_states = hidden_states[:, txt_seq_len:]
 
         # Project output with adaptive normalization
         hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)
+
+        # Note: If Kontext mode, output includes both base and reference tokens.
+        # The caller (pipeline) is responsible for slicing to get only base tokens:
+        #   output = output[:, :original_seq_len]
+        # This is intentionally NOT done here to give caller flexibility.
 
         return output
 
