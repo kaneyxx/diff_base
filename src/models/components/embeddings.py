@@ -263,19 +263,27 @@ class RotaryEmbedding(nn.Module):
 
 def apply_rotary_emb(
     x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
+    cos_or_tuple: torch.Tensor | Tuple[torch.Tensor, torch.Tensor],
+    sin: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Apply rotary embeddings to input tensor.
 
     Args:
         x: Input tensor [B, heads, seq_len, dim].
-        cos: Cosine component [seq_len, dim].
-        sin: Sine component [seq_len, dim].
+        cos_or_tuple: Either cosine component [seq_len, dim] or tuple of (cos, sin).
+        sin: Sine component [seq_len, dim]. Optional if cos_or_tuple is a tuple.
 
     Returns:
         Tensor with rotary embeddings applied.
     """
+    # Handle tuple input (cos, sin)
+    if isinstance(cos_or_tuple, tuple):
+        cos, sin = cos_or_tuple
+    else:
+        cos = cos_or_tuple
+        if sin is None:
+            raise ValueError("sin must be provided if cos_or_tuple is not a tuple")
+
     # Rotate pairs of dimensions
     x_rot = torch.stack([-x[..., 1::2], x[..., ::2]], dim=-1)
     x_rot = x_rot.reshape(x.shape)

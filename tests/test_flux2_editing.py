@@ -87,10 +87,10 @@ class TestRearrangeLatent:
 
 
 class TestPositionIds:
-    """Tests for position ID generation."""
+    """Tests for 4D position ID generation [t, h, w, l]."""
 
     def test_position_ids_shape(self):
-        """Test position IDs have correct shape."""
+        """Test position IDs have correct 4D shape."""
         batch_size = 2
         height = 32
         width = 32
@@ -101,42 +101,43 @@ class TestPositionIds:
             width=width,
             device=torch.device("cpu"),
             dtype=torch.float32,
-            ref_image_id=0,
+            time_offset=0.0,
         )
 
         expected_seq = height * width
-        assert ids.shape == (batch_size, expected_seq, 3)
+        # Now 4D: [t, h, w, l]
+        assert ids.shape == (batch_size, expected_seq, 4)
 
-    def test_position_ids_base_image(self):
-        """Test base images get id=0."""
+    def test_position_ids_target_image(self):
+        """Test target images get time_offset=0."""
         ids = create_position_ids(
             batch_size=1,
             height=8,
             width=8,
             device=torch.device("cpu"),
             dtype=torch.float32,
-            ref_image_id=0,  # Base image
+            time_offset=0.0,  # Target image
         )
 
-        # All image indices should be 0
-        assert torch.all(ids[..., 0] == 0)
+        # All time offsets should be 0.0
+        assert torch.all(ids[..., 0] == 0.0)
 
     def test_position_ids_reference_image(self):
-        """Test reference images get id=1."""
+        """Test reference images get time_offset=1.0."""
         ids = create_position_ids(
             batch_size=1,
             height=8,
             width=8,
             device=torch.device("cpu"),
             dtype=torch.float32,
-            ref_image_id=1,  # Reference image
+            time_offset=1.0,  # Reference image
         )
 
-        # All image indices should be 1
-        assert torch.all(ids[..., 0] == 1)
+        # All time offsets should be 1.0
+        assert torch.all(ids[..., 0] == 1.0)
 
     def test_position_ids_spatial_coords(self):
-        """Test spatial coordinates are correct."""
+        """Test spatial coordinates (h, w) are correct."""
         height, width = 4, 4
 
         ids = create_position_ids(
@@ -145,21 +146,72 @@ class TestPositionIds:
             width=width,
             device=torch.device("cpu"),
             dtype=torch.float32,
-            ref_image_id=0,
+            time_offset=0.0,
         )
 
         # Check first few positions
-        # Position 0: (y=0, x=0)
-        assert ids[0, 0, 1] == 0  # y
-        assert ids[0, 0, 2] == 0  # x
+        # Position 0: (h=0, w=0)
+        assert ids[0, 0, 1] == 0  # h
+        assert ids[0, 0, 2] == 0  # w
 
-        # Position 1: (y=0, x=1)
-        assert ids[0, 1, 1] == 0  # y
-        assert ids[0, 1, 2] == 1  # x
+        # Position 1: (h=0, w=1)
+        assert ids[0, 1, 1] == 0  # h
+        assert ids[0, 1, 2] == 1  # w
 
-        # Position width: (y=1, x=0)
-        assert ids[0, width, 1] == 1  # y
-        assert ids[0, width, 2] == 0  # x
+        # Position width: (h=1, w=0)
+        assert ids[0, width, 1] == 1  # h
+        assert ids[0, width, 2] == 0  # w
+
+    def test_position_ids_sequence_index(self):
+        """Test sequence index (l) is set correctly."""
+        ids = create_position_ids(
+            batch_size=1,
+            height=4,
+            width=4,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            time_offset=0.0,
+            sequence_index=0,
+        )
+
+        # Default sequence index should be 0
+        assert torch.all(ids[..., 3] == 0)
+
+        # Custom sequence index
+        ids_custom = create_position_ids(
+            batch_size=1,
+            height=4,
+            width=4,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            time_offset=0.0,
+            sequence_index=2,
+        )
+        assert torch.all(ids_custom[..., 3] == 2)
+
+    def test_position_ids_4d_format_order(self):
+        """Test that position ID dimensions are in [t, h, w, l] order."""
+        ids = create_position_ids(
+            batch_size=1,
+            height=4,
+            width=4,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            time_offset=1.5,
+            sequence_index=3,
+        )
+
+        # Verify dimension order
+        # dim 0: t (time_offset)
+        assert torch.all(ids[..., 0] == 1.5)
+        # dim 1: h (height, should vary)
+        assert ids[0, 0, 1] == 0  # First position h=0
+        assert ids[0, 4, 1] == 1  # After width positions h=1
+        # dim 2: w (width, should vary)
+        assert ids[0, 0, 2] == 0  # First position w=0
+        assert ids[0, 1, 2] == 1  # Second position w=1
+        # dim 3: l (sequence index)
+        assert torch.all(ids[..., 3] == 3)
 
 
 class TestFillExtraChannels:
@@ -210,7 +262,7 @@ class TestKontextConditioning:
     """Tests for Kontext conditioning preparation."""
 
     def test_kontext_conditioning_shapes(self):
-        """Test Kontext conditioning returns correct shapes."""
+        """Test Kontext conditioning returns correct shapes with 4D position IDs."""
         batch_size = 2
         height, width = 512, 512
         latent_channels = 32
@@ -235,10 +287,11 @@ class TestKontextConditioning:
         expected_dim = latent_channels * patch_size * patch_size
 
         assert img_cond_seq.shape == (batch_size, expected_seq, expected_dim)
-        assert img_cond_seq_ids.shape == (batch_size, expected_seq, 3)
+        # Now 4D: [t, h, w, l]
+        assert img_cond_seq_ids.shape == (batch_size, expected_seq, 4)
 
-    def test_kontext_conditioning_ref_image_id(self):
-        """Test Kontext conditioning uses ref_image_id=1."""
+    def test_kontext_conditioning_time_offset(self):
+        """Test Kontext conditioning uses time_offset=1.0 for reference images."""
         vae = TestMockVAE.MockVAE(latent_channels=32)
         reference_images = torch.randn(1, 3, 256, 256)
 
@@ -249,8 +302,24 @@ class TestKontextConditioning:
             dtype=torch.float32,
         )
 
-        # All image indices should be 1 (reference)
-        assert torch.all(img_cond_seq_ids[..., 0] == 1)
+        # All time offsets should be 1.0 (reference image)
+        assert torch.all(img_cond_seq_ids[..., 0] == 1.0)
+
+    def test_kontext_conditioning_custom_time_offset(self):
+        """Test Kontext conditioning with custom time_offset."""
+        vae = TestMockVAE.MockVAE(latent_channels=32)
+        reference_images = torch.randn(1, 3, 256, 256)
+
+        _, img_cond_seq_ids = prepare_kontext_conditioning(
+            reference_images=reference_images,
+            vae=vae,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            time_offset=2.0,  # Custom offset for second reference
+        )
+
+        # All time offsets should be 2.0
+        assert torch.all(img_cond_seq_ids[..., 0] == 2.0)
 
 
 class TestFillConditioning:
@@ -310,7 +379,6 @@ class TestTransformerConditioning:
             "fill_extra_channels": 4,
         })
 
-    @pytest.mark.skip(reason="Pre-existing rotary embedding API issue in codebase")
     def test_transformer_backward_compatible(self, transformer_config):
         """Test transformer works without conditioning (backward compatible)."""
         from src.models.flux.v2.transformer import Flux2Transformer
@@ -338,9 +406,8 @@ class TestTransformerConditioning:
         # Output should have same seq_len as input
         assert output.shape == (batch_size, seq_len, 128)
 
-    @pytest.mark.skip(reason="Pre-existing rotary embedding API issue in codebase")
     def test_transformer_with_kontext(self, transformer_config):
-        """Test transformer accepts Kontext conditioning."""
+        """Test transformer accepts Kontext conditioning with 4D position IDs."""
         from src.models.flux.v2.transformer import Flux2Transformer
 
         transformer = Flux2Transformer(transformer_config, variant="dev")
@@ -355,10 +422,10 @@ class TestTransformerConditioning:
         encoder_hidden_states = torch.randn(batch_size, txt_seq_len, 256)
         pooled_projections = torch.randn(batch_size, 256)
 
-        # Kontext conditioning
+        # Kontext conditioning with 4D position IDs [t, h, w, l]
         img_cond_seq = torch.randn(batch_size, ref_seq_len, 128)
-        img_cond_seq_ids = torch.zeros(batch_size, ref_seq_len, 3)
-        img_cond_seq_ids[..., 0] = 1  # Reference image
+        img_cond_seq_ids = torch.zeros(batch_size, ref_seq_len, 4)
+        img_cond_seq_ids[..., 0] = 1.0  # time_offset=1.0 for reference image
 
         with torch.no_grad():
             output = transformer(
@@ -407,7 +474,6 @@ class TestTransformerConditioning:
         assert transformer.x_embedder_fill is None
         assert transformer.fill_extra_channels == 0
 
-    @pytest.mark.skip(reason="Pre-existing rotary embedding API issue in codebase")
     def test_transformer_with_fill(self, transformer_config):
         """Test transformer accepts Fill conditioning with x_embedder_fill."""
         from src.models.flux.v2.transformer import Flux2Transformer

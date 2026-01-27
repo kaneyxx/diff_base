@@ -6,8 +6,15 @@ FLUX.1 variants (dev, schnell) use:
 - 3072 hidden size, 24 attention heads
 - T5-XXL + CLIP-L text encoders
 - 16 latent channels
+
+Image Editing Support:
+- Kontext Mode: Reference image editing via sequence-wise concatenation
+  - img_cond_seq is concatenated along sequence dimension (dim=1)
+  - 4D Position IDs [t, h, w, l] distinguish target (t=0) from reference (t=1)
+- Fill Mode: NOT supported in FLUX.1
 """
 
+import math
 from typing import Optional, Tuple
 
 import torch
@@ -15,8 +22,13 @@ import torch.nn as nn
 from omegaconf import DictConfig
 
 from ..components.attention import FluxJointTransformerBlock, FluxSingleTransformerBlock
-from ..components.embeddings import FluxPosEmbed, get_timestep_embedding
+from ..components.embeddings import (
+    FluxPosEmbed,
+    get_timestep_embedding,
+    compute_rope_from_position_ids,
+)
 from ...components.embeddings import MLPEmbedder, RotaryEmbedding
+from .conditioning import create_position_ids
 
 
 class Flux1Transformer(nn.Module):
@@ -117,6 +129,8 @@ class Flux1Transformer(nn.Module):
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
         guidance: Optional[torch.Tensor] = None,
+        img_cond_seq: Optional[torch.Tensor] = None,
+        img_cond_seq_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -126,12 +140,65 @@ class Flux1Transformer(nn.Module):
             encoder_hidden_states: Text embeddings [B, txt_seq, hidden_size].
             pooled_projections: Pooled text embeddings [B, pooled_dim].
             guidance: Optional guidance scale [B].
+            img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
+                Concatenated along sequence dimension.
+            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 4].
+                4D format [t, h, w, l] used for positional encoding.
 
         Returns:
             Predicted output [B, seq_len, in_channels].
+            Note: If Kontext mode, output includes both base and reference tokens.
+            The caller (pipeline) is responsible for slicing to get only base tokens.
         """
+        B = hidden_states.shape[0]
+        device = hidden_states.device
+        dtype = hidden_states.dtype
+
         # Embed inputs
         hidden_states = self.x_embedder(hidden_states)
+
+        # Compute base image position IDs (time_offset=0 for target image)
+        base_seq_len = hidden_states.shape[1]
+        h = w = int(math.sqrt(base_seq_len))
+        if h * w != base_seq_len:
+            h, w = 1, base_seq_len
+
+        base_position_ids = create_position_ids(
+            batch_size=B,
+            height=h,
+            width=w,
+            device=device,
+            dtype=dtype,
+            time_offset=0.0,  # Target image uses time_offset=0
+        )
+
+        # Handle Kontext mode (sequence-wise concatenation)
+        if img_cond_seq is not None:
+            # Embed reference image sequence
+            ref_embedded = self.x_embedder(img_cond_seq)
+            # Concatenate along sequence dimension
+            hidden_states = torch.cat([hidden_states, ref_embedded], dim=1)
+
+            # Concatenate position IDs if provided
+            if img_cond_seq_ids is not None:
+                combined_position_ids = torch.cat([base_position_ids, img_cond_seq_ids], dim=1)
+            else:
+                # Create default position IDs for reference with time_offset=1.0
+                ref_seq_len = img_cond_seq.shape[1]
+                ref_h = ref_w = int(math.sqrt(ref_seq_len))
+                if ref_h * ref_w != ref_seq_len:
+                    ref_h, ref_w = 1, ref_seq_len
+                ref_position_ids = create_position_ids(
+                    batch_size=B,
+                    height=ref_h,
+                    width=ref_w,
+                    device=device,
+                    dtype=dtype,
+                    time_offset=1.0,  # Reference image uses time_offset=1.0
+                )
+                combined_position_ids = torch.cat([base_position_ids, ref_position_ids], dim=1)
+        else:
+            combined_position_ids = base_position_ids
 
         # Time embedding
         temb = get_timestep_embedding(timestep)
@@ -143,12 +210,20 @@ class Flux1Transformer(nn.Module):
 
         temb = temb + self.pooled_text_embed(pooled_projections)
 
-        # Get rotary embeddings
-        img_seq_len = hidden_states.shape[1]
+        # Compute rotary embeddings from 4D position IDs
+        img_seq_len = hidden_states.shape[1]  # Includes Kontext if present
         txt_seq_len = encoder_hidden_states.shape[1]
 
-        img_rotary_emb = self.rope(img_seq_len, hidden_states.device)
-        txt_rotary_emb = self.rope(txt_seq_len, hidden_states.device)
+        # Get head dimension for RoPE
+        head_dim = self.hidden_size // self.num_heads
+
+        # Compute image RoPE from position IDs (uses 4D [t, h, w, l] format)
+        img_rotary_emb = compute_rope_from_position_ids(
+            combined_position_ids, head_dim, self.rope.theta
+        )
+
+        # Text uses standard 1D RoPE
+        txt_rotary_emb = self.rope(txt_seq_len, device)
 
         # Joint attention blocks
         txt_hidden = encoder_hidden_states
@@ -164,15 +239,20 @@ class Flux1Transformer(nn.Module):
         # Concatenate for single stream
         hidden_states = torch.cat([txt_hidden, hidden_states], dim=1)
 
-        # Combined rotary for single stream
-        combined_seq_len = txt_seq_len + img_seq_len
-        combined_rotary_emb = self.rope(combined_seq_len, hidden_states.device)
+        # Create combined position IDs for single stream (text + image)
+        txt_position_ids = torch.zeros(B, txt_seq_len, 4, device=device, dtype=dtype)
+        txt_position_ids[..., 3] = torch.arange(txt_seq_len, device=device).float()
+
+        combined_stream_position_ids = torch.cat([txt_position_ids, combined_position_ids], dim=1)
+        combined_rotary_emb = compute_rope_from_position_ids(
+            combined_stream_position_ids, head_dim, self.rope.theta
+        )
 
         # Single stream blocks
         for block in self.single_blocks:
             hidden_states = block(hidden_states, temb, combined_rotary_emb)
 
-        # Extract image tokens
+        # Extract image tokens (all image tokens including Kontext if present)
         hidden_states = hidden_states[:, txt_seq_len:]
 
         # Project output

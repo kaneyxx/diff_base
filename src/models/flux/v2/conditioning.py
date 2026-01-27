@@ -5,13 +5,19 @@ This module provides utilities for image editing with FLUX.2:
 1. Kontext Mode: Reference image editing via sequence-wise concatenation
    - Encode reference images via VAE
    - Rearrange to sequence format
-   - Create position IDs with ref_image_id=1
+   - Create 4D position IDs [t, h, w, l] with time_offset=1.0 for references
    - Concatenate along sequence dimension in denoise loop
 
 2. Fill Mode: Inpainting via channel-wise concatenation
    - Apply mask to reference image
    - Encode and add mask as extra channels
    - Concatenate along channel dimension in denoise loop
+
+Position ID Format (4D):
+- t: Temporal/time offset (0.0 for target image, 1.0+ for reference images)
+- h: Height coordinate in patches
+- w: Width coordinate in patches
+- l: Sequence/layer index within patch position
 """
 
 from typing import Optional, Tuple
@@ -99,17 +105,23 @@ def create_position_ids(
     width: int,
     device: torch.device,
     dtype: torch.dtype,
-    ref_image_id: int = 0,
+    time_offset: float = 0.0,
+    sequence_index: int = 0,
 ) -> torch.Tensor:
-    """Create position IDs for image patches.
+    """Create 4D position IDs [t, h, w, l] for FLUX.2.
 
-    Position IDs have shape [B, seq, 3] where:
-    - ids[..., 0] = image index (0 for base, 1+ for references)
-    - ids[..., 1] = row index (y position)
-    - ids[..., 2] = column index (x position)
+    Position IDs have shape [B, seq, 4] where:
+    - ids[..., 0] = t (temporal/time offset, 0 for target, >0 for reference)
+    - ids[..., 1] = h (height coordinate in patches)
+    - ids[..., 2] = w (width coordinate in patches)
+    - ids[..., 3] = l (sequence index within patch)
 
-    In FLUX Kontext, reference images use ref_image_id=1 to distinguish
-    them from the generated image (ref_image_id=0).
+    In FLUX Kontext mode:
+    - Target/generated images use time_offset=0.0
+    - Reference images use time_offset=1.0 (or higher for multiple refs)
+
+    This 4D format enables proper positional encoding that distinguishes
+    between target and reference images in the spatial-temporal space.
 
     Args:
         batch_size: Batch size.
@@ -117,10 +129,11 @@ def create_position_ids(
         width: Spatial width in patches.
         device: Target device.
         dtype: Data type.
-        ref_image_id: Image index (0 for base, 1 for reference).
+        time_offset: Time dimension value (0.0 for target, 1.0 for reference).
+        sequence_index: Sequence/layer index within each patch position.
 
     Returns:
-        Position IDs tensor of shape [B, height*width, 3].
+        Position IDs tensor of shape [B, height*width, 4].
     """
     num_patches = height * width
 
@@ -129,20 +142,19 @@ def create_position_ids(
     x_indices = torch.arange(width, device=device)
     y_grid, x_grid = torch.meshgrid(y_indices, x_indices, indexing="ij")
 
-    # Flatten to sequence
-    y_flat = y_grid.reshape(-1)  # [num_patches]
-    x_flat = x_grid.reshape(-1)  # [num_patches]
+    # Create position components
+    t = torch.full((num_patches,), time_offset, device=device, dtype=dtype)
+    h = y_grid.reshape(-1).to(dtype)
+    w = x_grid.reshape(-1).to(dtype)
+    l = torch.full((num_patches,), float(sequence_index), device=device, dtype=dtype)
 
-    # Create image index tensor (all same for a single image)
-    img_idx = torch.full((num_patches,), ref_image_id, device=device)
+    # Stack: [num_patches, 4] with order [t, h, w, l]
+    ids = torch.stack([t, h, w, l], dim=-1)
 
-    # Stack: [num_patches, 3]
-    ids = torch.stack([img_idx, y_flat, x_flat], dim=-1)
-
-    # Expand to batch: [B, num_patches, 3]
+    # Expand to batch: [B, num_patches, 4]
     ids = ids.unsqueeze(0).expand(batch_size, -1, -1)
 
-    return ids.to(dtype)
+    return ids
 
 
 def prepare_kontext_conditioning(
@@ -151,16 +163,17 @@ def prepare_kontext_conditioning(
     device: torch.device,
     dtype: torch.dtype,
     patch_size: int = 2,
+    time_offset: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Prepare Kontext conditioning from reference images.
 
     Encodes reference images through VAE and converts to sequence format
-    with appropriate position IDs.
+    with appropriate 4D position IDs [t, h, w, l].
 
     In FLUX Kontext:
     1. Reference images are encoded via VAE
     2. Latents are patchified to sequence format
-    3. Position IDs have ref_image_id=1 (vs 0 for base)
+    3. Position IDs have time_offset=1.0 (vs 0.0 for target)
     4. In denoise loop, ref sequence is concatenated with base sequence
 
     Args:
@@ -169,11 +182,12 @@ def prepare_kontext_conditioning(
         device: Target device.
         dtype: Data type.
         patch_size: Patch size for sequence conversion.
+        time_offset: Time offset for reference images (default 1.0).
 
     Returns:
         Tuple of:
         - img_cond_seq: Encoded reference sequence [B, ref_seq, patch_dim]
-        - img_cond_seq_ids: Position IDs [B, ref_seq, 3]
+        - img_cond_seq_ids: Position IDs [B, ref_seq, 4]
     """
     batch_size = reference_images.shape[0]
 
@@ -205,14 +219,14 @@ def prepare_kontext_conditioning(
     # Convert to sequence format
     img_cond_seq = rearrange_latent_to_sequence(latent, patch_size=patch_size)
 
-    # Create position IDs with ref_image_id=1
+    # Create 4D position IDs with time_offset for reference images
     img_cond_seq_ids = create_position_ids(
         batch_size=batch_size,
         height=h,
         width=w,
         device=device,
         dtype=dtype,
-        ref_image_id=1,  # Reference images use id=1
+        time_offset=time_offset,  # Reference images use time_offset=1.0
     )
 
     return img_cond_seq, img_cond_seq_ids

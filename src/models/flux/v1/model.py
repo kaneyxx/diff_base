@@ -3,10 +3,14 @@
 FLUX.1 variants:
 - dev: Full model with guidance, 12B parameters
 - schnell: Distilled model without guidance, 12B parameters
+
+Image Editing Support:
+- Kontext Mode: Reference image editing via encode_reference_images()
+- Fill Mode: NOT supported in FLUX.1
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -17,6 +21,7 @@ from ...base import BaseDiffusionModel
 from .transformer import Flux1Transformer
 from .vae import Flux1VAE
 from .text_encoder import Flux1TextEncoders
+from .conditioning import prepare_kontext_conditioning
 from ....utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +71,8 @@ class Flux1Model(BaseDiffusionModel):
         encoder_hidden_states: torch.Tensor,
         pooled_projections: Optional[torch.Tensor] = None,
         guidance: Optional[torch.Tensor] = None,
+        img_cond_seq: Optional[torch.Tensor] = None,
+        img_cond_seq_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through Transformer.
@@ -76,6 +83,8 @@ class Flux1Model(BaseDiffusionModel):
             encoder_hidden_states: T5 text embeddings [B, txt_seq, dim].
             pooled_projections: CLIP pooled embeddings [B, pool_dim].
             guidance: Optional guidance scale [B].
+            img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
+            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 4].
             **kwargs: Additional arguments.
 
         Returns:
@@ -92,7 +101,56 @@ class Flux1Model(BaseDiffusionModel):
             encoder_hidden_states=encoder_hidden_states,
             pooled_projections=pooled_projections,
             guidance=guidance,
+            img_cond_seq=img_cond_seq,
+            img_cond_seq_ids=img_cond_seq_ids,
         )
+
+    def encode_reference_images(
+        self,
+        images: torch.Tensor,
+        mode: Literal["kontext"] = "kontext",
+        patch_size: int = 2,
+    ) -> Dict[str, torch.Tensor]:
+        """Encode reference images for Kontext conditioning.
+
+        Note: FLUX.1 only supports 'kontext' mode, not 'fill' mode.
+        Fill mode (inpainting with channel-wise concatenation) is only
+        available in FLUX.2.
+
+        Args:
+            images: Reference images [B, 3, H, W] in range [-1, 1].
+            mode: Conditioning mode (only 'kontext' is supported).
+            patch_size: Patch size for sequence conversion.
+
+        Returns:
+            Dictionary with:
+            - img_cond_seq: Encoded reference sequence [B, ref_seq, patch_dim]
+            - img_cond_seq_ids: Position IDs [B, ref_seq, 4]
+
+        Raises:
+            ValueError: If mode is not 'kontext'.
+        """
+        if mode != "kontext":
+            raise ValueError(
+                f"FLUX.1 only supports 'kontext' mode, got '{mode}'. "
+                "Fill mode is only available in FLUX.2."
+            )
+
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+
+        img_cond_seq, img_cond_seq_ids = prepare_kontext_conditioning(
+            reference_images=images,
+            vae=self.vae,
+            device=device,
+            dtype=dtype,
+            patch_size=patch_size,
+        )
+
+        return {
+            "img_cond_seq": img_cond_seq,
+            "img_cond_seq_ids": img_cond_seq_ids,
+        }
 
     def encode_text(
         self,
