@@ -380,6 +380,17 @@ class TestStateDictShape:
         ff_out = state_dict["transformer_blocks.0.ff.net.2.weight"]
         assert ff_out.shape == (hidden_size, mlp_hidden), f"ff.net.2 wrong shape: {ff_out.shape}"
 
+    def test_single_block_proj_out_shape(self, model):
+        """Verify single block proj_out takes concatenated attn+mlp input."""
+        state_dict = model.state_dict()
+        hidden_size = 3072
+        mlp_hidden = int(hidden_size * 4.0)  # mlp_ratio = 4.0
+
+        # proj_out input is concatenated [attn_out, mlp_out] = [3072, 12288] = 15360
+        proj_out = state_dict["single_transformer_blocks.0.proj_out.weight"]
+        expected_in = hidden_size + mlp_hidden  # 3072 + 12288 = 15360
+        assert proj_out.shape == (hidden_size, expected_in), f"proj_out wrong shape: {proj_out.shape}, expected ({hidden_size}, {expected_in})"
+
 
 class TestForwardPass:
     """Verify forward pass works with aligned naming."""

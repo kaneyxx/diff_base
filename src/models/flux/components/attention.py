@@ -279,11 +279,12 @@ class FluxSingleTransformerBlock(nn.Module):
         else:
             self.qk_norm_layer = None
 
-        # MLP - HF naming: proj_mlp + activation + proj_out
+        # MLP - HF naming: proj_mlp + activation, then proj_out combines attn + mlp
         mlp_hidden = int(hidden_size * mlp_ratio)
         self.proj_mlp = nn.Linear(hidden_size, mlp_hidden)
         self.act_mlp = nn.GELU(approximate="tanh")
-        self.proj_out = nn.Linear(mlp_hidden, hidden_size)
+        # proj_out takes concatenated [attn_out, mlp_out] as input
+        self.proj_out = nn.Linear(hidden_size + mlp_hidden, hidden_size)
 
     def forward(
         self,
@@ -316,9 +317,12 @@ class FluxSingleTransformerBlock(nn.Module):
         # MLP (using HF-aligned names)
         mlp_out = self.proj_mlp(hidden_states)
         mlp_out = self.act_mlp(mlp_out)
-        mlp_out = self.proj_out(mlp_out)
+
+        # Concatenate attention + MLP, then project (HF approach)
+        combined = torch.cat([attn_out, mlp_out], dim=-1)
+        proj_out = self.proj_out(combined)
 
         # Combine with gating
-        hidden_states = residual + gate * (attn_out + mlp_out)
+        hidden_states = residual + gate * proj_out
 
         return hidden_states
