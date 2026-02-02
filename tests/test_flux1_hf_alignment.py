@@ -182,9 +182,15 @@ class TestStateKeyAlignment:
         assert has_to_k, "Should have single attn.to_k"
         assert has_to_v, "Should have single attn.to_v"
 
-        # Should have to_out.0 in single blocks
-        has_to_out_0 = any("single_transformer_blocks.0.attn.to_out.0." in k for k in keys)
-        assert has_to_out_0, "Should have single attn.to_out.0"
+        # Should have norm_q, norm_k in single blocks (FLUX.1 single blocks have QK norm)
+        has_norm_q = any("single_transformer_blocks.0.attn.norm_q." in k for k in keys)
+        has_norm_k = any("single_transformer_blocks.0.attn.norm_k." in k for k in keys)
+        assert has_norm_q, "Should have single attn.norm_q"
+        assert has_norm_k, "Should have single attn.norm_k"
+
+        # Should NOT have to_out in single blocks (FLUX.1 single blocks don't have to_out)
+        has_to_out_0 = any("single_transformer_blocks.0.attn.to_out" in k for k in keys)
+        assert not has_to_out_0, "Should NOT have single attn.to_out"
 
     def test_single_block_mlp_naming(self, model):
         """Verify single blocks use proj_mlp and proj_out naming."""
@@ -236,6 +242,24 @@ class TestStateKeyAlignment:
 
         assert has_context_weight, "Should have context_embedder.weight"
         assert has_context_bias, "Should have context_embedder.bias"
+
+    def test_norm_out_adalayernorm_structure(self, model):
+        """Verify norm_out uses AdaLayerNormContinuous with correct keys."""
+        keys = set(model.state_dict().keys())
+
+        # Should have norm_out.linear (AdaLayerNormContinuous structure)
+        has_norm_out_linear_weight = any("norm_out.linear.weight" in k for k in keys)
+        has_norm_out_linear_bias = any("norm_out.linear.bias" in k for k in keys)
+
+        assert has_norm_out_linear_weight, "Should have norm_out.linear.weight"
+        assert has_norm_out_linear_bias, "Should have norm_out.linear.bias"
+
+        # Should NOT have simple norm_out.weight/bias (old LayerNorm style)
+        has_old_norm_out_weight = "norm_out.weight" in keys
+        has_old_norm_out_bias = "norm_out.bias" in keys
+
+        assert not has_old_norm_out_weight, "Should NOT have norm_out.weight (old LayerNorm style)"
+        assert not has_old_norm_out_bias, "Should NOT have norm_out.bias (old LayerNorm style)"
 
     def test_schnell_no_guidance_embedder(self):
         """Verify schnell variant has no guidance embedder."""
@@ -297,19 +321,34 @@ class TestPEFTTargetModules:
         assert len(to_v_modules) == 57, f"Expected 57 to_v modules, got {len(to_v_modules)}"
 
     def test_to_out_0_modules_exist(self, model):
-        """Verify to_out.0 modules exist and can be found."""
+        """Verify to_out.0 modules exist in joint blocks only."""
         to_out_modules = []
         for name, module in model.named_modules():
             if name.endswith(".to_out.0"):
                 to_out_modules.append(name)
 
         assert len(to_out_modules) > 0, "Should have to_out.0 modules"
-        # 19 joint blocks + 38 single blocks = 57 to_out.0 modules
-        assert len(to_out_modules) == 57, f"Expected 57 to_out.0 modules, got {len(to_out_modules)}"
+        # Only 19 joint blocks have to_out.0 (single blocks don't have to_out)
+        assert len(to_out_modules) == 19, f"Expected 19 to_out.0 modules, got {len(to_out_modules)}"
+
+    def test_norm_qk_modules_exist(self, model):
+        """Verify norm_q and norm_k modules exist in single blocks."""
+        norm_q_modules = []
+        norm_k_modules = []
+        for name, module in model.named_modules():
+            if name.endswith(".norm_q"):
+                norm_q_modules.append(name)
+            if name.endswith(".norm_k"):
+                norm_k_modules.append(name)
+
+        # 38 single blocks have norm_q and norm_k
+        assert len(norm_q_modules) == 38, f"Expected 38 norm_q modules, got {len(norm_q_modules)}"
+        assert len(norm_k_modules) == 38, f"Expected 38 norm_k modules, got {len(norm_k_modules)}"
 
     def test_peft_target_modules_findable(self, model):
         """Verify all standard PEFT targets are findable."""
-        target_modules = ["to_q", "to_k", "to_v", "to_out.0"]
+        # Note: to_out.0 only exists in joint blocks, not single blocks
+        target_modules = ["to_q", "to_k", "to_v", "to_out.0", "norm_q", "norm_k"]
 
         for target in target_modules:
             found = False

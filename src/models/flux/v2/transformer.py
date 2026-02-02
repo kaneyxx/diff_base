@@ -151,9 +151,9 @@ class Flux2Transformer(nn.Module):
             for _ in range(num_layers)
         ])
 
-        # Single stream blocks (with QK norm for FLUX.2)
+        # Single stream blocks (QK norm is built-in to FluxSingleAttention)
         self.single_blocks = nn.ModuleList([
-            FluxSingleTransformerBlock(hidden_size, num_heads, qk_norm=qk_norm)
+            FluxSingleTransformerBlock(hidden_size, num_heads)
             for _ in range(num_single_layers)
         ])
 

@@ -37,6 +37,7 @@ from ..components.embeddings import (
     get_timestep_embedding,
     compute_rope_from_position_ids,
 )
+from ..components.layers import AdaLayerNormContinuous
 from ...components.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     RotaryEmbedding,
@@ -131,8 +132,14 @@ class Flux1Transformer(nn.Module):
             for _ in range(num_single_layers)
         ])
 
-        # Output projection
-        self.norm_out = nn.LayerNorm(hidden_size)
+        # Output projection (HF-aligned: AdaLayerNormContinuous produces norm_out.linear.*)
+        self.norm_out = AdaLayerNormContinuous(
+            embedding_dim=hidden_size,
+            conditioning_embedding_dim=hidden_size,
+            elementwise_affine=False,
+            eps=1e-6,
+            bias=True,
+        )
         self.proj_out = nn.Linear(hidden_size, in_channels)
 
         self._gradient_checkpointing = False
@@ -271,8 +278,8 @@ class Flux1Transformer(nn.Module):
         # Extract image tokens (all image tokens including Kontext if present)
         hidden_states = hidden_states[:, txt_seq_len:]
 
-        # Project output
-        hidden_states = self.norm_out(hidden_states)
+        # Project output (HF-aligned: norm_out takes temb as conditioning)
+        hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)
 
         return output

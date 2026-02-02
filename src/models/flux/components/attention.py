@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import AdaLayerNormZero, AdaLayerNormZeroSingle
+from .layers import AdaLayerNormZero, AdaLayerNormZeroSingle, RMSNorm
 from ...components.attention import JointAttention
 from ...components.embeddings import apply_rotary_emb
 
@@ -165,7 +165,10 @@ class FluxSingleAttention(nn.Module):
 
     HuggingFace-aligned naming:
     - attn.to_q, attn.to_k, attn.to_v
-    - attn.to_out.0 (via ModuleList)
+    - attn.norm_q, attn.norm_k (RMSNorm for QK normalization)
+
+    Note: FLUX.1 single blocks do NOT have a to_out projection.
+    The output is directly the reshaped attention output.
     """
 
     def __init__(self, dim: int, num_heads: int, qkv_bias: bool = True):
@@ -179,21 +182,20 @@ class FluxSingleAttention(nn.Module):
         self.to_k = nn.Linear(dim, dim, bias=qkv_bias)
         self.to_v = nn.Linear(dim, dim, bias=qkv_bias)
 
-        # Output projection as ModuleList for to_out.0 naming
-        self.to_out = nn.ModuleList([nn.Linear(dim, dim), nn.Identity()])
+        # QK normalization (FLUX.1 single blocks always have this)
+        self.norm_q = RMSNorm(self.head_dim)
+        self.norm_k = RMSNorm(self.head_dim)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        qk_norm_layer: Optional[nn.Module] = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             hidden_states: Input tensor [B, seq_len, dim].
             rotary_emb: Optional rotary embeddings (cos, sin).
-            qk_norm_layer: Optional QK normalization layer.
 
         Returns:
             Output tensor [B, seq_len, dim].
@@ -210,9 +212,9 @@ class FluxSingleAttention(nn.Module):
         k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # Apply QK norm if provided
-        if qk_norm_layer is not None:
-            q, k = qk_norm_layer(q, k)
+        # Apply QK normalization (always applied in FLUX.1 single blocks)
+        q = self.norm_q(q)
+        k = self.norm_k(k)
 
         # Apply rotary embeddings
         if rotary_emb is not None:
@@ -225,10 +227,8 @@ class FluxSingleAttention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_out = torch.matmul(attn_weights, v)
 
-        # Reshape and project
+        # Reshape output (no to_out projection in FLUX.1 single blocks)
         attn_out = attn_out.transpose(1, 2).reshape(batch_size, seq_len, -1)
-        attn_out = self.to_out[0](attn_out)
-        attn_out = self.to_out[1](attn_out)  # Identity
 
         return attn_out
 
@@ -241,7 +241,7 @@ class FluxSingleTransformerBlock(nn.Module):
 
     HuggingFace-aligned naming convention:
     - norm.linear (AdaLayerNormZeroSingle)
-    - attn.to_q, attn.to_k, attn.to_v, attn.to_out.0
+    - attn.to_q, attn.to_k, attn.to_v, attn.norm_q, attn.norm_k
     - proj_mlp, proj_out
     """
 
@@ -250,7 +250,6 @@ class FluxSingleTransformerBlock(nn.Module):
         hidden_size: int,
         num_heads: int,
         mlp_ratio: float = 4.0,
-        qk_norm: bool = False,
     ):
         """Initialize single transformer block.
 
@@ -258,26 +257,17 @@ class FluxSingleTransformerBlock(nn.Module):
             hidden_size: Hidden dimension.
             num_heads: Number of attention heads.
             mlp_ratio: MLP hidden dimension multiplier.
-            qk_norm: Whether to use QK normalization (FLUX.2).
         """
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
-        self.qk_norm = qk_norm
 
         # Layer norm
         self.norm = AdaLayerNormZeroSingle(hidden_size)
 
-        # Attention with separate Q/K/V (HF naming)
+        # Attention with separate Q/K/V and built-in QK norm (HF naming)
         self.attn = FluxSingleAttention(hidden_size, num_heads)
-
-        # Optional QK normalization
-        if qk_norm:
-            from .layers import QKNorm
-            self.qk_norm_layer = QKNorm(self.head_dim)
-        else:
-            self.qk_norm_layer = None
 
         # MLP - HF naming: proj_mlp + activation, then proj_out combines attn + mlp
         mlp_hidden = int(hidden_size * mlp_ratio)
@@ -307,11 +297,10 @@ class FluxSingleTransformerBlock(nn.Module):
         # Norm + modulation
         hidden_states, gate = self.norm(hidden_states, temb)
 
-        # Self attention using FluxSingleAttention
+        # Self attention using FluxSingleAttention (QK norm is built-in)
         attn_out = self.attn(
             hidden_states,
             rotary_emb=rotary_emb,
-            qk_norm_layer=self.qk_norm_layer,
         )
 
         # MLP (using HF-aligned names)
