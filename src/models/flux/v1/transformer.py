@@ -101,8 +101,12 @@ class Flux1Transformer(nn.Module):
         self.in_channels = in_channels
         self.guidance_embeds = guidance_embeds
 
-        # Input projection
+        # Input projection for latents
         self.x_embedder = nn.Linear(in_channels, hidden_size)
+
+        # Context embedder for text (T5 4096 -> hidden_size 3072)
+        joint_attention_dim = config.get("joint_attention_dim", 4096)
+        self.context_embedder = nn.Linear(joint_attention_dim, hidden_size)
 
         # Combined time/guidance/text embedding (HF naming: time_text_embed)
         self.time_text_embed = CombinedTimestepGuidanceTextProjEmbeddings(
@@ -148,7 +152,8 @@ class Flux1Transformer(nn.Module):
         Args:
             hidden_states: Latent tensor [B, seq_len, in_channels].
             timestep: Timestep values [B].
-            encoder_hidden_states: Text embeddings [B, txt_seq, hidden_size].
+            encoder_hidden_states: Text embeddings [B, txt_seq, joint_attention_dim].
+                Will be projected from joint_attention_dim (4096) to hidden_size (3072).
             pooled_projections: Pooled text embeddings [B, pooled_dim].
             guidance: Optional guidance scale [B].
             img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
@@ -232,6 +237,9 @@ class Flux1Transformer(nn.Module):
 
         # Text uses standard 1D RoPE
         txt_rotary_emb = self.rope(txt_seq_len, device)
+
+        # Project text embeddings from T5 dim (4096) to hidden dim (3072)
+        encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         # Joint attention blocks (using HF-aligned transformer_blocks)
         txt_hidden = encoder_hidden_states

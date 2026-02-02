@@ -33,6 +33,7 @@ def create_test_config():
         "in_channels": 64,
         "pooled_projection_dim": 768,
         "guidance_embeds": True,
+        "joint_attention_dim": 4096,  # T5 text encoder dimension
     })
 
 
@@ -225,6 +226,17 @@ class TestStateKeyAlignment:
         assert not has_guidance_embed, "Should NOT have standalone guidance_embed"
         assert not has_pooled_text, "Should NOT have standalone pooled_text_embed"
 
+    def test_context_embedder_exists(self, model):
+        """Verify context_embedder exists for text projection."""
+        keys = set(model.state_dict().keys())
+
+        # Should have context_embedder (projects T5 4096 -> hidden 3072)
+        has_context_weight = any("context_embedder.weight" in k for k in keys)
+        has_context_bias = any("context_embedder.bias" in k for k in keys)
+
+        assert has_context_weight, "Should have context_embedder.weight"
+        assert has_context_bias, "Should have context_embedder.bias"
+
     def test_schnell_no_guidance_embedder(self):
         """Verify schnell variant has no guidance embedder."""
         config = OmegaConf.create({
@@ -353,6 +365,18 @@ class TestStateDictShape:
         v_weight = state_dict["transformer_blocks.0.attn.to_v.weight"]
         assert v_weight.shape == (hidden_size, hidden_size), f"to_v wrong shape: {v_weight.shape}"
 
+    def test_context_embedder_shape(self, model):
+        """Verify context_embedder projects from T5 dim (4096) to hidden (3072)."""
+        state_dict = model.state_dict()
+        hidden_size = 3072
+        joint_attention_dim = 4096  # T5 dimension
+
+        # context_embedder: [hidden_size, joint_attention_dim]
+        ctx_weight = state_dict["context_embedder.weight"]
+        ctx_bias = state_dict["context_embedder.bias"]
+        assert ctx_weight.shape == (hidden_size, joint_attention_dim), f"context_embedder.weight wrong shape: {ctx_weight.shape}"
+        assert ctx_bias.shape == (hidden_size,), f"context_embedder.bias wrong shape: {ctx_bias.shape}"
+
     def test_output_projection_shapes(self, model):
         """Verify output projections have correct shapes."""
         state_dict = model.state_dict()
@@ -407,12 +431,12 @@ class TestForwardPass:
         seq_len = 64  # 8x8 patches
         in_channels = 64
         txt_seq_len = 77
-        hidden_size = 3072
+        joint_attention_dim = 4096  # T5 dimension
         pooled_dim = 768
 
         hidden_states = torch.randn(batch_size, seq_len, in_channels)
         timestep = torch.tensor([0.5])
-        encoder_hidden_states = torch.randn(batch_size, txt_seq_len, hidden_size)
+        encoder_hidden_states = torch.randn(batch_size, txt_seq_len, joint_attention_dim)
         pooled_projections = torch.randn(batch_size, pooled_dim)
         guidance = torch.tensor([3.5])
 
@@ -438,6 +462,7 @@ class TestForwardPass:
             "in_channels": 64,
             "pooled_projection_dim": 768,
             "guidance_embeds": False,
+            "joint_attention_dim": 4096,
         })
         model = Flux1Transformer(config, variant="schnell")
 
@@ -445,12 +470,12 @@ class TestForwardPass:
         seq_len = 64
         in_channels = 64
         txt_seq_len = 77
-        hidden_size = 3072
+        joint_attention_dim = 4096  # T5 dimension
         pooled_dim = 768
 
         hidden_states = torch.randn(batch_size, seq_len, in_channels)
         timestep = torch.tensor([0.5])
-        encoder_hidden_states = torch.randn(batch_size, txt_seq_len, hidden_size)
+        encoder_hidden_states = torch.randn(batch_size, txt_seq_len, joint_attention_dim)
         pooled_projections = torch.randn(batch_size, pooled_dim)
 
         # Should not raise even without guidance
