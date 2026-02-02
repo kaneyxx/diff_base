@@ -270,8 +270,9 @@ def apply_rotary_emb(
 
     Args:
         x: Input tensor [B, heads, seq_len, dim].
-        cos_or_tuple: Either cosine component [seq_len, dim] or tuple of (cos, sin).
-        sin: Sine component [seq_len, dim]. Optional if cos_or_tuple is a tuple.
+        cos_or_tuple: Either cosine component or tuple of (cos, sin).
+            Supports shapes: [seq_len, dim] (2D) or [B, seq_len, dim] (3D).
+        sin: Sine component. Optional if cos_or_tuple is a tuple.
 
     Returns:
         Tensor with rotary embeddings applied.
@@ -288,10 +289,15 @@ def apply_rotary_emb(
     x_rot = torch.stack([-x[..., 1::2], x[..., ::2]], dim=-1)
     x_rot = x_rot.reshape(x.shape)
 
-    # Add position dimension if needed
+    # Add dimensions for broadcasting with [B, heads, seq, dim]
     if cos.dim() == 2:
-        cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, seq, dim]
+        # [seq, dim] -> [1, 1, seq, dim]
+        cos = cos.unsqueeze(0).unsqueeze(0)
         sin = sin.unsqueeze(0).unsqueeze(0)
+    elif cos.dim() == 3:
+        # [B, seq, dim] -> [B, 1, seq, dim]
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
 
     return x * cos + x_rot * sin
 
