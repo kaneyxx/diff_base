@@ -67,14 +67,10 @@ class SelfAttention(nn.Module):
         k = k.view(batch_size, seq_len, self.heads, self.dim_head).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.heads, self.dim_head).transpose(1, 2)
 
-        # Scaled dot-product attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        hidden_states = torch.matmul(attn_weights, v)
+        # Scaled dot-product attention (uses Flash Attention when available)
+        hidden_states = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attention_mask, scale=self.scale
+        )
 
         # Reshape back
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, seq_len, -1)
@@ -148,14 +144,10 @@ class CrossAttention(nn.Module):
         k = k.view(batch_size, kv_seq_len, self.heads, self.dim_head).transpose(1, 2)
         v = v.view(batch_size, kv_seq_len, self.heads, self.dim_head).transpose(1, 2)
 
-        # Scaled dot-product attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        hidden_states = torch.matmul(attn_weights, v)
+        # Scaled dot-product attention (uses Flash Attention when available)
+        hidden_states = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attention_mask, scale=self.scale
+        )
 
         # Reshape back
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, seq_len, -1)
@@ -283,10 +275,8 @@ class JointAttention(nn.Module):
         k = torch.cat([k_txt, k_img], dim=2)
         v = torch.cat([v_txt, v_img], dim=2)
 
-        # Compute attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        hidden_states = torch.matmul(attn_weights, v)
+        # Scaled dot-product attention (uses Flash Attention when available)
+        hidden_states = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         # Split back into text and image
         hidden_states = hidden_states.transpose(1, 2).reshape(

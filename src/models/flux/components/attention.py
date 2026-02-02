@@ -219,10 +219,8 @@ class FluxSingleAttention(nn.Module):
             q = apply_rotary_emb(q, cos, sin)
             k = apply_rotary_emb(k, cos, sin)
 
-        # Attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_out = torch.matmul(attn_weights, v)
+        # Scaled dot-product attention (uses Flash Attention when available)
+        attn_out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         # Reshape output (no to_out projection in FLUX.1 single blocks)
         attn_out = attn_out.transpose(1, 2).reshape(batch_size, seq_len, -1)
