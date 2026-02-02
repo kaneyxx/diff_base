@@ -339,6 +339,76 @@ class CombinedTimestepTextProjEmbeddings(nn.Module):
         return time_embed + text_embed
 
 
+class CombinedTimestepGuidanceTextProjEmbeddings(nn.Module):
+    """Combined embeddings matching HuggingFace time_text_embed structure.
+
+    This class produces state dict keys compatible with HuggingFace's
+    FluxTransformer2DModel for weight loading.
+
+    Expected key patterns:
+    - time_text_embed.timestep_embedder.linear_1/linear_2
+    - time_text_embed.guidance_embedder.linear_1/linear_2 (if guidance_embeds=True)
+    - time_text_embed.text_embedder.linear_1/linear_2
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        pooled_projection_dim: int,
+        guidance_embeds: bool = True,
+    ):
+        """Initialize combined embeddings.
+
+        Args:
+            embedding_dim: Output embedding dimension.
+            pooled_projection_dim: Input dimension for pooled text.
+            guidance_embeds: Whether to include guidance embedder.
+        """
+        super().__init__()
+
+        # Timestep embedder: uses linear_1/linear_2 naming
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim)
+
+        # Text embedder: uses linear_1/linear_2 naming
+        self.text_embedder = TextProjection(pooled_projection_dim, embedding_dim)
+
+        # Optional guidance embedder
+        self.guidance_embeds = guidance_embeds
+        if guidance_embeds:
+            self.guidance_embedder = TimestepEmbedding(256, embedding_dim)
+
+    def forward(
+        self,
+        timestep: torch.Tensor,
+        pooled_projection: torch.Tensor,
+        guidance: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            timestep: Timestep values [B].
+            pooled_projection: Pooled text embeddings [B, pooled_dim].
+            guidance: Optional guidance scale [B].
+
+        Returns:
+            Combined embeddings [B, embedding_dim].
+        """
+        # Get timestep embedding
+        timestep_emb = get_timestep_embedding(timestep, dim=256)
+        timestep_emb = self.timestep_embedder(timestep_emb)
+
+        # Add guidance embedding if provided
+        if guidance is not None and self.guidance_embeds:
+            guidance_emb = get_timestep_embedding(guidance, dim=256)
+            timestep_emb = timestep_emb + self.guidance_embedder(guidance_emb)
+
+        # Add text embedding
+        text_emb = self.text_embedder(pooled_projection)
+        combined = timestep_emb + text_emb
+
+        return combined
+
+
 class PatchEmbed(nn.Module):
     """2D image patch embedding (for transformer-based models)."""
 

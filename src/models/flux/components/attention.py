@@ -11,11 +11,52 @@ from ...components.attention import JointAttention
 from ...components.embeddings import apply_rotary_emb
 
 
+class FluxFeedForwardGELU(nn.Module):
+    """GELU wrapper with internal projection for ff.net.0.proj naming."""
+
+    def __init__(self, dim_in: int, dim_out: int):
+        super().__init__()
+        self.proj = nn.Linear(dim_in, dim_out)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.gelu(self.proj(x), approximate="tanh")
+
+
+class FluxFeedForward(nn.Module):
+    """HF-aligned FeedForward producing ff.net.0.proj, ff.net.2 keys.
+
+    Structure:
+    - net.0: FluxFeedForwardGELU (with .proj inside)
+    - net.1: Dropout (Identity in inference)
+    - net.2: Linear output projection
+    """
+
+    def __init__(self, dim: int, mult: float = 4.0):
+        super().__init__()
+        inner_dim = int(dim * mult)
+        self.net = nn.ModuleList([
+            FluxFeedForwardGELU(dim, inner_dim),  # net.0 with .proj
+            nn.Dropout(0.0),                       # net.1
+            nn.Linear(inner_dim, dim),             # net.2
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.net[0](x)
+        x = self.net[1](x)
+        x = self.net[2](x)
+        return x
+
+
 class FluxJointTransformerBlock(nn.Module):
     """Joint transformer block for processing image and text together.
 
     Used in both FLUX.1 and FLUX.2. Processes image and text tokens
     jointly through attention, then separately through MLPs.
+
+    HuggingFace-aligned naming convention:
+    - norm1 (image), norm1_context (text)
+    - norm2 (image), norm2_context (text)
+    - ff (image MLP), ff_context (text MLP)
     """
 
     def __init__(
@@ -38,9 +79,9 @@ class FluxJointTransformerBlock(nn.Module):
         self.num_heads = num_heads
         self.qk_norm = qk_norm
 
-        # Layer norms for image and text
-        self.norm1_img = AdaLayerNormZero(hidden_size)
-        self.norm1_txt = AdaLayerNormZero(hidden_size)
+        # Layer norms - HF naming: norm1 (image), norm1_context (text)
+        self.norm1 = AdaLayerNormZero(hidden_size)
+        self.norm1_context = AdaLayerNormZero(hidden_size)
 
         # Joint attention
         self.attn = JointAttention(
@@ -55,22 +96,13 @@ class FluxJointTransformerBlock(nn.Module):
         else:
             self.qk_norm_layer = None
 
-        # MLPs
-        mlp_hidden = int(hidden_size * mlp_ratio)
+        # Layer norms for MLP - HF naming: norm2 (image), norm2_context (text)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.norm2_context = nn.LayerNorm(hidden_size)
 
-        self.norm2_img = nn.LayerNorm(hidden_size)
-        self.mlp_img = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden),
-            nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden, hidden_size),
-        )
-
-        self.norm2_txt = nn.LayerNorm(hidden_size)
-        self.mlp_txt = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden),
-            nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden, hidden_size),
-        )
+        # MLPs - HF naming: ff (image), ff_context (text)
+        self.ff = FluxFeedForward(hidden_size, mlp_ratio)
+        self.ff_context = FluxFeedForward(hidden_size, mlp_ratio)
 
     def forward(
         self,
@@ -95,11 +127,11 @@ class FluxJointTransformerBlock(nn.Module):
         img_residual = img_hidden_states
         txt_residual = txt_hidden_states
 
-        # Norm + modulation
+        # Norm + modulation (using HF-aligned names)
         img_hidden, img_gate_msa, img_shift_mlp, img_scale_mlp, img_gate_mlp = \
-            self.norm1_img(img_hidden_states, temb)
+            self.norm1(img_hidden_states, temb)
         txt_hidden, txt_gate_msa, txt_shift_mlp, txt_scale_mlp, txt_gate_mlp = \
-            self.norm1_txt(txt_hidden_states, temb)
+            self.norm1_context(txt_hidden_states, temb)
 
         # Joint attention
         img_attn, txt_attn = self.attn(
@@ -113,19 +145,92 @@ class FluxJointTransformerBlock(nn.Module):
         img_hidden_states = img_residual + img_gate_msa * img_attn
         txt_hidden_states = txt_residual + txt_gate_msa * txt_attn
 
-        # MLP for image
-        img_hidden = self.norm2_img(img_hidden_states)
+        # MLP for image (using HF-aligned names)
+        img_hidden = self.norm2(img_hidden_states)
         img_hidden = img_hidden * (1 + img_scale_mlp) + img_shift_mlp
-        img_mlp = self.mlp_img(img_hidden)
+        img_mlp = self.ff(img_hidden)
         img_hidden_states = img_hidden_states + img_gate_mlp * img_mlp
 
-        # MLP for text
-        txt_hidden = self.norm2_txt(txt_hidden_states)
+        # MLP for text (using HF-aligned names)
+        txt_hidden = self.norm2_context(txt_hidden_states)
         txt_hidden = txt_hidden * (1 + txt_scale_mlp) + txt_shift_mlp
-        txt_mlp = self.mlp_txt(txt_hidden)
+        txt_mlp = self.ff_context(txt_hidden)
         txt_hidden_states = txt_hidden_states + txt_gate_mlp * txt_mlp
 
         return img_hidden_states, txt_hidden_states
+
+
+class FluxSingleAttention(nn.Module):
+    """Single attention with separate Q/K/V for HF compatibility.
+
+    HuggingFace-aligned naming:
+    - attn.to_q, attn.to_k, attn.to_v
+    - attn.to_out.0 (via ModuleList)
+    """
+
+    def __init__(self, dim: int, num_heads: int, qkv_bias: bool = True):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        # Separate Q/K/V projections (HF naming)
+        self.to_q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.to_k = nn.Linear(dim, dim, bias=qkv_bias)
+        self.to_v = nn.Linear(dim, dim, bias=qkv_bias)
+
+        # Output projection as ModuleList for to_out.0 naming
+        self.to_out = nn.ModuleList([nn.Linear(dim, dim), nn.Identity()])
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        qk_norm_layer: Optional[nn.Module] = None,
+    ) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            hidden_states: Input tensor [B, seq_len, dim].
+            rotary_emb: Optional rotary embeddings (cos, sin).
+            qk_norm_layer: Optional QK normalization layer.
+
+        Returns:
+            Output tensor [B, seq_len, dim].
+        """
+        batch_size, seq_len, _ = hidden_states.shape
+
+        # Compute separate Q, K, V
+        q = self.to_q(hidden_states)
+        k = self.to_k(hidden_states)
+        v = self.to_v(hidden_states)
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Apply QK norm if provided
+        if qk_norm_layer is not None:
+            q, k = qk_norm_layer(q, k)
+
+        # Apply rotary embeddings
+        if rotary_emb is not None:
+            cos, sin = rotary_emb
+            q = apply_rotary_emb(q, cos, sin)
+            k = apply_rotary_emb(k, cos, sin)
+
+        # Attention
+        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_out = torch.matmul(attn_weights, v)
+
+        # Reshape and project
+        attn_out = attn_out.transpose(1, 2).reshape(batch_size, seq_len, -1)
+        attn_out = self.to_out[0](attn_out)
+        attn_out = self.to_out[1](attn_out)  # Identity
+
+        return attn_out
 
 
 class FluxSingleTransformerBlock(nn.Module):
@@ -133,6 +238,11 @@ class FluxSingleTransformerBlock(nn.Module):
 
     Used in both FLUX.1 and FLUX.2. Processes already-concatenated
     image and text tokens through self-attention.
+
+    HuggingFace-aligned naming convention:
+    - norm.linear (AdaLayerNormZeroSingle)
+    - attn.to_q, attn.to_k, attn.to_v, attn.to_out.0
+    - proj_mlp, proj_out
     """
 
     def __init__(
@@ -159,9 +269,8 @@ class FluxSingleTransformerBlock(nn.Module):
         # Layer norm
         self.norm = AdaLayerNormZeroSingle(hidden_size)
 
-        # Self attention projections
-        self.to_qkv = nn.Linear(hidden_size, hidden_size * 3)
-        self.to_out = nn.Linear(hidden_size, hidden_size)
+        # Attention with separate Q/K/V (HF naming)
+        self.attn = FluxSingleAttention(hidden_size, num_heads)
 
         # Optional QK normalization
         if qk_norm:
@@ -170,15 +279,11 @@ class FluxSingleTransformerBlock(nn.Module):
         else:
             self.qk_norm_layer = None
 
-        # MLP
+        # MLP - HF naming: proj_mlp + activation + proj_out
         mlp_hidden = int(hidden_size * mlp_ratio)
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden),
-            nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden, hidden_size),
-        )
-
-        self.scale = self.head_dim ** -0.5
+        self.proj_mlp = nn.Linear(hidden_size, mlp_hidden)
+        self.act_mlp = nn.GELU(approximate="tanh")
+        self.proj_out = nn.Linear(mlp_hidden, hidden_size)
 
     def forward(
         self,
@@ -197,41 +302,21 @@ class FluxSingleTransformerBlock(nn.Module):
             Output tensor.
         """
         residual = hidden_states
-        batch_size, seq_len, _ = hidden_states.shape
 
         # Norm + modulation
         hidden_states, gate = self.norm(hidden_states, temb)
 
-        # Self attention
-        qkv = self.to_qkv(hidden_states)
-        q, k, v = qkv.chunk(3, dim=-1)
+        # Self attention using FluxSingleAttention
+        attn_out = self.attn(
+            hidden_states,
+            rotary_emb=rotary_emb,
+            qk_norm_layer=self.qk_norm_layer,
+        )
 
-        # Reshape for multi-head attention
-        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Apply QK norm if enabled
-        if self.qk_norm_layer is not None:
-            q, k = self.qk_norm_layer(q, k)
-
-        # Apply rotary embeddings
-        if rotary_emb is not None:
-            cos, sin = rotary_emb
-            q = apply_rotary_emb(q, cos, sin)
-            k = apply_rotary_emb(k, cos, sin)
-
-        # Attention
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_out = torch.matmul(attn_weights, v)
-
-        # Reshape and project
-        attn_out = attn_out.transpose(1, 2).reshape(batch_size, seq_len, -1)
-        attn_out = self.to_out(attn_out)
-
-        # MLP
-        mlp_out = self.mlp(hidden_states)
+        # MLP (using HF-aligned names)
+        mlp_out = self.proj_mlp(hidden_states)
+        mlp_out = self.act_mlp(mlp_out)
+        mlp_out = self.proj_out(mlp_out)
 
         # Combine with gating
         hidden_states = residual + gate * (attn_out + mlp_out)

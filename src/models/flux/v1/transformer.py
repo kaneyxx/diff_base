@@ -12,6 +12,16 @@ Image Editing Support:
   - img_cond_seq is concatenated along sequence dimension (dim=1)
   - 4D Position IDs [t, h, w, l] distinguish target (t=0) from reference (t=1)
 - Fill Mode: NOT supported in FLUX.1
+
+HuggingFace Alignment:
+This transformer uses naming conventions compatible with HuggingFace's
+FluxTransformer2DModel for direct weight loading from pretrained checkpoints.
+
+Key naming mappings:
+- transformer_blocks (not joint_blocks)
+- single_transformer_blocks (not single_blocks)
+- time_text_embed.timestep_embedder/guidance_embedder/text_embedder
+- Blocks use to_q/to_k/to_v (not combined to_qkv)
 """
 
 import math
@@ -27,7 +37,10 @@ from ..components.embeddings import (
     get_timestep_embedding,
     compute_rope_from_position_ids,
 )
-from ...components.embeddings import MLPEmbedder, RotaryEmbedding
+from ...components.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings,
+    RotaryEmbedding,
+)
 from .conditioning import create_position_ids
 
 
@@ -37,6 +50,8 @@ class Flux1Transformer(nn.Module):
     Configuration for FLUX.1 variants:
     - dev: 19 joint + 38 single blocks, guidance enabled
     - schnell: 19 joint + 38 single blocks, guidance disabled
+
+    Uses HuggingFace-compatible naming for direct weight loading.
     """
 
     # Default configurations for FLUX.1 variants
@@ -89,29 +104,25 @@ class Flux1Transformer(nn.Module):
         # Input projection
         self.x_embedder = nn.Linear(in_channels, hidden_size)
 
-        # Time/guidance embedding
-        self.time_embed = MLPEmbedder(256, hidden_size)
-
-        if guidance_embeds:
-            self.guidance_embed = MLPEmbedder(256, hidden_size)
-        else:
-            self.guidance_embed = None
-
-        # Pooled text projection
-        self.pooled_text_embed = nn.Linear(pooled_projection_dim, hidden_size)
+        # Combined time/guidance/text embedding (HF naming: time_text_embed)
+        self.time_text_embed = CombinedTimestepGuidanceTextProjEmbeddings(
+            embedding_dim=hidden_size,
+            pooled_projection_dim=pooled_projection_dim,
+            guidance_embeds=guidance_embeds,
+        )
 
         # Positional embedding (RoPE)
         head_dim = hidden_size // num_heads
         self.rope = RotaryEmbedding(head_dim)
 
-        # Joint attention blocks
-        self.joint_blocks = nn.ModuleList([
+        # Joint attention blocks (HF naming: transformer_blocks)
+        self.transformer_blocks = nn.ModuleList([
             FluxJointTransformerBlock(hidden_size, num_heads)
             for _ in range(num_layers)
         ])
 
-        # Single stream blocks
-        self.single_blocks = nn.ModuleList([
+        # Single stream blocks (HF naming: single_transformer_blocks)
+        self.single_transformer_blocks = nn.ModuleList([
             FluxSingleTransformerBlock(hidden_size, num_heads)
             for _ in range(num_single_layers)
         ])
@@ -200,15 +211,12 @@ class Flux1Transformer(nn.Module):
         else:
             combined_position_ids = base_position_ids
 
-        # Time embedding
-        temb = get_timestep_embedding(timestep)
-        temb = self.time_embed(temb)
-
-        if guidance is not None and self.guidance_embed is not None:
-            guidance_emb = get_timestep_embedding(guidance)
-            temb = temb + self.guidance_embed(guidance_emb)
-
-        temb = temb + self.pooled_text_embed(pooled_projections)
+        # Combined time/guidance/text embedding (using HF-aligned time_text_embed)
+        temb = self.time_text_embed(
+            timestep=timestep,
+            pooled_projection=pooled_projections,
+            guidance=guidance,
+        )
 
         # Compute rotary embeddings from 4D position IDs
         img_seq_len = hidden_states.shape[1]  # Includes Kontext if present
@@ -225,9 +233,9 @@ class Flux1Transformer(nn.Module):
         # Text uses standard 1D RoPE
         txt_rotary_emb = self.rope(txt_seq_len, device)
 
-        # Joint attention blocks
+        # Joint attention blocks (using HF-aligned transformer_blocks)
         txt_hidden = encoder_hidden_states
-        for block in self.joint_blocks:
+        for block in self.transformer_blocks:
             hidden_states, txt_hidden = block(
                 hidden_states,
                 txt_hidden,
@@ -248,8 +256,8 @@ class Flux1Transformer(nn.Module):
             combined_stream_position_ids, head_dim, self.rope.theta
         )
 
-        # Single stream blocks
-        for block in self.single_blocks:
+        # Single stream blocks (using HF-aligned single_transformer_blocks)
+        for block in self.single_transformer_blocks:
             hidden_states = block(hidden_states, temb, combined_rotary_emb)
 
         # Extract image tokens (all image tokens including Kontext if present)

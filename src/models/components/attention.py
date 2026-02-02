@@ -165,7 +165,12 @@ class CrossAttention(nn.Module):
 
 
 class JointAttention(nn.Module):
-    """Joint attention for processing image and text together (used in Flux)."""
+    """Joint attention for processing image and text together (used in Flux).
+
+    HuggingFace-aligned naming convention:
+    - Image stream: to_q, to_k, to_v, to_out (ModuleList)
+    - Text stream: add_q_proj, add_k_proj, add_v_proj, to_add_out
+    """
 
     def __init__(
         self,
@@ -187,12 +192,19 @@ class JointAttention(nn.Module):
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
 
-        # Separate projections for image and text
-        self.to_qkv_image = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.to_qkv_text = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        # Image stream - separate Q/K/V projections (HF naming)
+        self.to_q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.to_k = nn.Linear(dim, dim, bias=qkv_bias)
+        self.to_v = nn.Linear(dim, dim, bias=qkv_bias)
 
-        self.to_out_image = nn.Linear(dim, dim, bias=proj_bias)
-        self.to_out_text = nn.Linear(dim, dim, bias=proj_bias)
+        # Text stream - add_* naming (HF convention)
+        self.add_q_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.add_k_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.add_v_proj = nn.Linear(dim, dim, bias=qkv_bias)
+
+        # Output projections - ModuleList for to_out.0 naming
+        self.to_out = nn.ModuleList([nn.Linear(dim, dim, bias=proj_bias), nn.Identity()])
+        self.to_add_out = nn.Linear(dim, dim, bias=proj_bias)
 
     def forward(
         self,
@@ -216,13 +228,15 @@ class JointAttention(nn.Module):
         img_seq_len = image_hidden_states.shape[1]
         txt_seq_len = text_hidden_states.shape[1]
 
-        # Compute QKV for both modalities
-        qkv_img = self.to_qkv_image(image_hidden_states)
-        qkv_txt = self.to_qkv_text(text_hidden_states)
+        # Compute separate Q, K, V for image
+        q_img = self.to_q(image_hidden_states)
+        k_img = self.to_k(image_hidden_states)
+        v_img = self.to_v(image_hidden_states)
 
-        # Split into Q, K, V
-        q_img, k_img, v_img = qkv_img.chunk(3, dim=-1)
-        q_txt, k_txt, v_txt = qkv_txt.chunk(3, dim=-1)
+        # Compute separate Q, K, V for text
+        q_txt = self.add_q_proj(text_hidden_states)
+        k_txt = self.add_k_proj(text_hidden_states)
+        v_txt = self.add_v_proj(text_hidden_states)
 
         # Reshape for multi-head attention
         def reshape_for_attention(x, seq_len):
@@ -264,9 +278,12 @@ class JointAttention(nn.Module):
         txt_output = hidden_states[:, :txt_seq_len]
         img_output = hidden_states[:, txt_seq_len:]
 
-        # Project outputs
-        img_output = self.to_out_image(img_output)
-        txt_output = self.to_out_text(txt_output)
+        # Project outputs using ModuleList for image (to_out.0)
+        img_output = self.to_out[0](img_output)
+        img_output = self.to_out[1](img_output)  # Identity
+
+        # Project text output
+        txt_output = self.to_add_out(txt_output)
 
         return img_output, txt_output
 
