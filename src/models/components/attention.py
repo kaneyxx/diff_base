@@ -206,6 +206,15 @@ class JointAttention(nn.Module):
         self.to_out = nn.ModuleList([nn.Linear(dim, dim, bias=proj_bias), nn.Identity()])
         self.to_add_out = nn.Linear(dim, dim, bias=proj_bias)
 
+        # QK normalization for image stream (HF naming: norm_q, norm_k)
+        from ..flux.components.layers import RMSNorm
+        self.norm_q = RMSNorm(self.head_dim)
+        self.norm_k = RMSNorm(self.head_dim)
+
+        # QK normalization for text stream (HF naming: norm_added_q, norm_added_k)
+        self.norm_added_q = RMSNorm(self.head_dim)
+        self.norm_added_k = RMSNorm(self.head_dim)
+
     def forward(
         self,
         image_hidden_states: torch.Tensor,
@@ -249,6 +258,14 @@ class JointAttention(nn.Module):
         q_txt = reshape_for_attention(q_txt, txt_seq_len)
         k_txt = reshape_for_attention(k_txt, txt_seq_len)
         v_txt = reshape_for_attention(v_txt, txt_seq_len)
+
+        # Apply QK normalization to image stream
+        q_img = self.norm_q(q_img)
+        k_img = self.norm_k(k_img)
+
+        # Apply QK normalization to text stream
+        q_txt = self.norm_added_q(q_txt)
+        k_txt = self.norm_added_k(k_txt)
 
         # Apply rotary embeddings if provided
         if image_rotary_emb is not None:

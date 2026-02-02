@@ -54,9 +54,11 @@ class FluxJointTransformerBlock(nn.Module):
     jointly through attention, then separately through MLPs.
 
     HuggingFace-aligned naming convention:
-    - norm1 (image), norm1_context (text)
-    - norm2 (image), norm2_context (text)
+    - norm1 (image), norm1_context (text) - AdaLayerNormZero
+    - attn.norm_q, attn.norm_k, attn.norm_added_q, attn.norm_added_k - QK norm
     - ff (image MLP), ff_context (text MLP)
+
+    Note: No norm2/norm2_context - modulation is applied directly after attention.
     """
 
     def __init__(
@@ -96,11 +98,8 @@ class FluxJointTransformerBlock(nn.Module):
         else:
             self.qk_norm_layer = None
 
-        # Layer norms for MLP - HF naming: norm2 (image), norm2_context (text)
-        self.norm2 = nn.LayerNorm(hidden_size)
-        self.norm2_context = nn.LayerNorm(hidden_size)
-
         # MLPs - HF naming: ff (image), ff_context (text)
+        # Note: No norm2/norm2_context - HuggingFace FLUX applies modulation directly
         self.ff = FluxFeedForward(hidden_size, mlp_ratio)
         self.ff_context = FluxFeedForward(hidden_size, mlp_ratio)
 
@@ -145,15 +144,13 @@ class FluxJointTransformerBlock(nn.Module):
         img_hidden_states = img_residual + img_gate_msa * img_attn
         txt_hidden_states = txt_residual + txt_gate_msa * txt_attn
 
-        # MLP for image (using HF-aligned names)
-        img_hidden = self.norm2(img_hidden_states)
-        img_hidden = img_hidden * (1 + img_scale_mlp) + img_shift_mlp
+        # MLP for image - apply modulation directly (no norm2 in HuggingFace)
+        img_hidden = img_hidden_states * (1 + img_scale_mlp) + img_shift_mlp
         img_mlp = self.ff(img_hidden)
         img_hidden_states = img_hidden_states + img_gate_mlp * img_mlp
 
-        # MLP for text (using HF-aligned names)
-        txt_hidden = self.norm2_context(txt_hidden_states)
-        txt_hidden = txt_hidden * (1 + txt_scale_mlp) + txt_shift_mlp
+        # MLP for text - apply modulation directly (no norm2_context in HuggingFace)
+        txt_hidden = txt_hidden_states * (1 + txt_scale_mlp) + txt_shift_mlp
         txt_mlp = self.ff_context(txt_hidden)
         txt_hidden_states = txt_hidden_states + txt_gate_mlp * txt_mlp
 

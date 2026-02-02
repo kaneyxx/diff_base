@@ -146,6 +146,35 @@ class TestStateKeyAlignment:
         assert not has_norm1_img, "Should NOT have norm1_img"
         assert not has_norm1_txt, "Should NOT have norm1_txt"
 
+    def test_joint_block_no_norm2(self, model):
+        """Verify joint blocks do NOT have norm2/norm2_context (HF alignment)."""
+        keys = set(model.state_dict().keys())
+
+        # Should NOT have norm2 or norm2_context (removed to match HuggingFace)
+        has_norm2 = any("transformer_blocks.0.norm2." in k for k in keys)
+        has_norm2_context = any("transformer_blocks.0.norm2_context." in k for k in keys)
+
+        assert not has_norm2, "Should NOT have norm2 in joint blocks"
+        assert not has_norm2_context, "Should NOT have norm2_context in joint blocks"
+
+    def test_joint_attention_qk_norm(self, model):
+        """Verify joint blocks have QK normalization in attention."""
+        keys = set(model.state_dict().keys())
+
+        # Should have attn.norm_q, attn.norm_k for image stream
+        has_norm_q = any("transformer_blocks.0.attn.norm_q." in k for k in keys)
+        has_norm_k = any("transformer_blocks.0.attn.norm_k." in k for k in keys)
+
+        assert has_norm_q, "Should have attn.norm_q in joint blocks"
+        assert has_norm_k, "Should have attn.norm_k in joint blocks"
+
+        # Should have attn.norm_added_q, attn.norm_added_k for text stream
+        has_norm_added_q = any("transformer_blocks.0.attn.norm_added_q." in k for k in keys)
+        has_norm_added_k = any("transformer_blocks.0.attn.norm_added_k." in k for k in keys)
+
+        assert has_norm_added_q, "Should have attn.norm_added_q in joint blocks"
+        assert has_norm_added_k, "Should have attn.norm_added_k in joint blocks"
+
     def test_joint_block_ff_naming(self, model):
         """Verify joint blocks use ff.net structure."""
         keys = set(model.state_dict().keys())
@@ -332,7 +361,7 @@ class TestPEFTTargetModules:
         assert len(to_out_modules) == 19, f"Expected 19 to_out.0 modules, got {len(to_out_modules)}"
 
     def test_norm_qk_modules_exist(self, model):
-        """Verify norm_q and norm_k modules exist in single blocks."""
+        """Verify norm_q and norm_k modules exist in both joint and single blocks."""
         norm_q_modules = []
         norm_k_modules = []
         for name, module in model.named_modules():
@@ -341,9 +370,23 @@ class TestPEFTTargetModules:
             if name.endswith(".norm_k"):
                 norm_k_modules.append(name)
 
-        # 38 single blocks have norm_q and norm_k
-        assert len(norm_q_modules) == 38, f"Expected 38 norm_q modules, got {len(norm_q_modules)}"
-        assert len(norm_k_modules) == 38, f"Expected 38 norm_k modules, got {len(norm_k_modules)}"
+        # 19 joint blocks + 38 single blocks = 57 norm_q and norm_k modules
+        assert len(norm_q_modules) == 57, f"Expected 57 norm_q modules, got {len(norm_q_modules)}"
+        assert len(norm_k_modules) == 57, f"Expected 57 norm_k modules, got {len(norm_k_modules)}"
+
+    def test_norm_added_qk_modules_exist(self, model):
+        """Verify norm_added_q and norm_added_k modules exist in joint blocks."""
+        norm_added_q_modules = []
+        norm_added_k_modules = []
+        for name, module in model.named_modules():
+            if name.endswith(".norm_added_q"):
+                norm_added_q_modules.append(name)
+            if name.endswith(".norm_added_k"):
+                norm_added_k_modules.append(name)
+
+        # 19 joint blocks have norm_added_q and norm_added_k for text stream
+        assert len(norm_added_q_modules) == 19, f"Expected 19 norm_added_q modules, got {len(norm_added_q_modules)}"
+        assert len(norm_added_k_modules) == 19, f"Expected 19 norm_added_k modules, got {len(norm_added_k_modules)}"
 
     def test_peft_target_modules_findable(self, model):
         """Verify all standard PEFT targets are findable."""
