@@ -17,23 +17,38 @@ import torch.nn as nn
 def get_timestep_embedding(
     timestep: torch.Tensor,
     dim: int = 256,
+    flip_sin_to_cos: bool = True,
+    downscale_freq_shift: float = 0,
     max_period: int = 10000,
 ) -> torch.Tensor:
     """Get sinusoidal timestep embedding.
 
+    Matches the HuggingFace diffusers implementation used by FLUX models.
+    FLUX uses flip_sin_to_cos=True and downscale_freq_shift=0.
+
     Args:
         timestep: Timestep values [B].
         dim: Embedding dimension.
+        flip_sin_to_cos: If True, output [cos, sin] order (FLUX default).
+        downscale_freq_shift: Shift for frequency denominator (FLUX uses 0).
         max_period: Maximum period for sinusoidal embeddings.
 
     Returns:
         Embeddings [B, dim].
     """
     half_dim = dim // 2
-    emb = math.log(max_period) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, device=timestep.device) * -emb)
+    exponent = -math.log(max_period) * torch.arange(
+        start=0, end=half_dim, dtype=torch.float32, device=timestep.device
+    )
+    exponent = exponent / (half_dim - downscale_freq_shift)
+
+    emb = torch.exp(exponent)
     emb = timestep[:, None].float() * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+
+    if flip_sin_to_cos:
+        emb = torch.cat([torch.cos(emb), torch.sin(emb)], dim=-1)
+    else:
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
 
     if dim % 2 == 1:
         emb = nn.functional.pad(emb, (0, 1))
