@@ -25,7 +25,7 @@ Key naming mappings:
 """
 
 import math
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -153,7 +153,8 @@ class Flux1Transformer(nn.Module):
         guidance: Optional[torch.Tensor] = None,
         img_cond_seq: Optional[torch.Tensor] = None,
         img_cond_seq_ids: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_hidden_states_at: Optional[List[int]] = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[int, torch.Tensor]]]:
         """Forward pass.
 
         Args:
@@ -167,9 +168,17 @@ class Flux1Transformer(nn.Module):
                 Concatenated along sequence dimension.
             img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 4].
                 4D format [t, h, w, l] used for positional encoding.
+            return_hidden_states_at: Optional list of joint block indices at which to
+                capture hidden states. When None, behavior is unchanged and returns
+                a single tensor. When set, returns a tuple of (output, captured_states)
+                where captured_states maps block index to hidden state tensor.
 
         Returns:
-            Predicted output [B, seq_len, in_channels].
+            If return_hidden_states_at is None:
+                Predicted output [B, seq_len, in_channels].
+            If return_hidden_states_at is set:
+                Tuple of (output, captured_hidden_states) where captured_hidden_states
+                is Dict[int, Tensor] mapping block index to hidden states.
             Note: If Kontext mode, output includes both base and reference tokens.
             The caller (pipeline) is responsible for slicing to get only base tokens.
         """
@@ -250,7 +259,8 @@ class Flux1Transformer(nn.Module):
 
         # Joint attention blocks (using HF-aligned transformer_blocks)
         txt_hidden = encoder_hidden_states
-        for block in self.transformer_blocks:
+        captured_hidden_states = {} if return_hidden_states_at is not None else None
+        for block_idx, block in enumerate(self.transformer_blocks):
             hidden_states, txt_hidden = block(
                 hidden_states,
                 txt_hidden,
@@ -258,6 +268,8 @@ class Flux1Transformer(nn.Module):
                 img_rotary_emb,
                 txt_rotary_emb,
             )
+            if captured_hidden_states is not None and block_idx in return_hidden_states_at:
+                captured_hidden_states[block_idx] = hidden_states
 
         # Concatenate for single stream
         hidden_states = torch.cat([txt_hidden, hidden_states], dim=1)
@@ -282,6 +294,8 @@ class Flux1Transformer(nn.Module):
         hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)
 
+        if captured_hidden_states is not None:
+            return output, captured_hidden_states
         return output
 
     def enable_gradient_checkpointing(self) -> None:
