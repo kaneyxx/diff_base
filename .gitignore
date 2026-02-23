@@ -105,3 +105,6 @@ Thumbs.db
 checkpoints/
 pretrained/
 *.bin
+
+# references
+ref/

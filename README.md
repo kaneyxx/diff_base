@@ -39,8 +39,28 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Install in development mode
+# Install in development mode (required for `from src.models...` imports)
 pip install -e .
+```
+
+> **Important:** `pip install -e .` is required. Without it, Python cannot resolve `from src.models...` imports used throughout the codebase.
+
+### Optional Dependencies
+
+`requirements.txt` installs everything including dev tools and wandb. For a minimal install, you can use `pyproject.toml` optional groups instead:
+
+```bash
+# Minimal (training only, no wandb/pytest)
+pip install -e .
+
+# With dev tools (pytest, black, ruff)
+pip install -e ".[dev]"
+
+# With logging (wandb, tensorboard)
+pip install -e ".[logging]"
+
+# Everything
+pip install -e ".[all]"
 ```
 
 ## Quick Start
@@ -282,8 +302,9 @@ training:
 ## Requirements
 
 - Python >= 3.10
-- PyTorch >= 2.2.0
+- PyTorch >= 2.2.0 (required for `F.scaled_dot_product_attention` / Flash Attention support)
 - CUDA-capable GPU with 24GB+ VRAM (recommended)
+- CUDA >= 11.8 (for Flash Attention kernel acceleration)
 
 ## Running Tests
 
