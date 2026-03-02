@@ -268,6 +268,10 @@ def apply_rotary_emb(
 ) -> torch.Tensor:
     """Apply rotary embeddings to input tensor.
 
+    Uses adjacent-pair rotation matching HuggingFace diffusers (repeat_interleave_real=True):
+    - Pairs are adjacent: [d0, d1], [d2, d3], ... not [d0, d_half], [d1, d_half+1]
+    - Rotation: [-x_imag, x_real] stacked and flattened
+
     Args:
         x: Input tensor [B, heads, seq_len, dim].
         cos_or_tuple: Either cosine component or tuple of (cos, sin).
@@ -285,9 +289,10 @@ def apply_rotary_emb(
         if sin is None:
             raise ValueError("sin must be provided if cos_or_tuple is not a tuple")
 
-    # Rotate pairs of dimensions
-    x_rot = torch.stack([-x[..., 1::2], x[..., ::2]], dim=-1)
-    x_rot = x_rot.reshape(x.shape)
+    # Adjacent-pair rotation (matches HuggingFace FLUX implementation)
+    # Split into real/imaginary by reshaping adjacent pairs: [..., dim] -> [..., dim//2, 2]
+    x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)
+    x_rot = torch.stack([-x_imag, x_real], dim=-1).flatten(-2)
 
     # Add dimensions for broadcasting with [B, heads, seq, dim]
     if cos.dim() == 2:
@@ -299,7 +304,7 @@ def apply_rotary_emb(
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
 
-    return x * cos + x_rot * sin
+    return (x.float() * cos + x_rot.float() * sin).to(x.dtype)
 
 
 class CombinedTimestepTextProjEmbeddings(nn.Module):

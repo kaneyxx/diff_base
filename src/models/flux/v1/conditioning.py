@@ -5,11 +5,10 @@ Provides Kontext mode for FLUX.1 (reference image editing).
 Note: FLUX.1 does NOT support Fill mode (channel-wise conditioning).
 Only Kontext mode (sequence-wise concatenation) is available.
 
-Position ID Format (4D):
-- t: Temporal/time offset (0.0 for target image, 1.0+ for reference images)
+Position ID Format (3D) — matches HuggingFace diffusers:
+- stream: Stream/image index (0 for target, 1 for reference in Kontext)
 - h: Height coordinate in patches
 - w: Width coordinate in patches
-- l: Sequence/layer index within patch position
 """
 
 from typing import Tuple
@@ -38,12 +37,12 @@ def prepare_kontext_conditioning(
     Similar to FLUX.2 but uses 16 latent channels (vs 32 for FLUX.2 dev).
 
     Encodes reference images through VAE and converts to sequence format
-    with appropriate 4D position IDs [t, h, w, l].
+    with appropriate 3D position IDs [stream, h, w].
 
     In FLUX.1 Kontext:
     1. Reference images are encoded via VAE (16 latent channels)
     2. Latents are patchified to sequence format
-    3. Position IDs have time_offset=1.0 (vs 0.0 for target)
+    3. Position IDs have stream=1 (vs 0 for target)
     4. In denoise loop, ref sequence is concatenated with base sequence
 
     Args:
@@ -89,7 +88,7 @@ def prepare_kontext_conditioning(
     # Convert to sequence format
     img_cond_seq = rearrange_latent_to_sequence(latent, patch_size=patch_size)
 
-    # Create 4D position IDs with time_offset for reference images
+    # Create 3D position IDs with stream index for reference images
     img_cond_seq_ids = create_position_ids(
         batch_size=batch_size,
         height=h,

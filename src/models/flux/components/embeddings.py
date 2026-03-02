@@ -2,9 +2,14 @@
 
 This module provides embedding utilities for FLUX models including:
 - Timestep embeddings (sinusoidal)
-- Positional embeddings (2D RoPE)
+- Positional embeddings (RoPE with per-axis frequencies)
 - Combined timestep/guidance embeddings
-- 4D position ID to RoPE conversion for Kontext mode
+- 3D position ID to RoPE conversion for Kontext mode
+
+RoPE implementation matches HuggingFace diffusers:
+- axes_dim=(16, 56, 56) for FLUX.1 (stream, height, width)
+- Uses repeat_interleave for adjacent-pair duplication
+- Position IDs are 3D [stream, h, w] (not 4D)
 """
 
 import math
@@ -59,108 +64,46 @@ def get_timestep_embedding(
 class FluxPosEmbed(nn.Module):
     """Positional embedding for Flux models.
 
-    Supports both 1D and 2D positional embeddings with RoPE-style encoding.
+    Matches HuggingFace FluxPosEmbed exactly:
+    - Takes position IDs tensor [seq, n_axes] or [B, seq, n_axes]
+    - Computes per-axis RoPE with repeat_interleave_real=True
+    - Concatenates cos/sin across axes
     """
 
     def __init__(
         self,
-        dim: int,
         theta: float = 10000.0,
-        axes_dims: Optional[Tuple[int, ...]] = None,
+        axes_dim: Tuple[int, ...] = (16, 56, 56),
     ):
         """Initialize FluxPosEmbed.
 
         Args:
-            dim: Embedding dimension per head.
             theta: Base for frequency computation.
-            axes_dims: Optional tuple of dimensions for each axis.
+            axes_dim: Per-axis dimension allocation (default FLUX.1: 16+56+56=128).
         """
         super().__init__()
-        self.dim = dim
         self.theta = theta
-        self.axes_dims = axes_dims or (dim // 2, dim // 2)
-
-    def _compute_2d_rope(
-        self,
-        height: int,
-        width: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Compute 2D rotary position embeddings.
-
-        Args:
-            height: Spatial height.
-            width: Spatial width.
-            device: Target device.
-            dtype: Target dtype.
-
-        Returns:
-            Tuple of (cos, sin) embeddings.
-        """
-        # Height frequencies
-        h_dim = self.axes_dims[0]
-        h_inv_freq = 1.0 / (
-            self.theta ** (torch.arange(0, h_dim, 2, device=device).float() / h_dim)
-        )
-        h_seq = torch.arange(height, device=device).float()
-        h_freqs = torch.outer(h_seq, h_inv_freq)
-
-        # Width frequencies
-        w_dim = self.axes_dims[1] if len(self.axes_dims) > 1 else self.axes_dims[0]
-        w_inv_freq = 1.0 / (
-            self.theta ** (torch.arange(0, w_dim, 2, device=device).float() / w_dim)
-        )
-        w_seq = torch.arange(width, device=device).float()
-        w_freqs = torch.outer(w_seq, w_inv_freq)
-
-        # Create 2D grid
-        h_freqs = h_freqs.unsqueeze(1).expand(-1, width, -1)  # [H, W, h_dim/2]
-        w_freqs = w_freqs.unsqueeze(0).expand(height, -1, -1)  # [H, W, w_dim/2]
-
-        # Combine and flatten
-        freqs = torch.cat([
-            h_freqs.reshape(-1, h_dim // 2),
-            w_freqs.reshape(-1, w_dim // 2),
-        ], dim=-1)
-
-        # Double for sin/cos pairs
-        freqs = torch.cat([freqs, freqs], dim=-1)
-
-        return freqs.cos().to(dtype), freqs.sin().to(dtype)
+        self.axes_dim = axes_dim
 
     def forward(
         self,
-        seq_len: int,
-        device: torch.device,
-        dtype: torch.dtype = torch.float32,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        ids: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get positional embeddings.
+        """Compute RoPE from position IDs.
+
+        Matches HuggingFace: for each axis i, compute
+        get_1d_rotary_pos_embed(axes_dim[i], ids[:, i], repeat_interleave_real=True)
+        then concatenate.
 
         Args:
-            seq_len: Sequence length (used if height/width not specified).
-            device: Target device.
-            dtype: Target dtype.
-            height: Optional spatial height for 2D embeddings.
-            width: Optional spatial width for 2D embeddings.
+            ids: Position IDs [seq, n_axes] or [B, seq, n_axes].
 
         Returns:
             Tuple of (cos, sin) embeddings.
         """
-        if height is not None and width is not None:
-            return self._compute_2d_rope(height, width, device, dtype)
-
-        # 1D rope
-        inv_freq = 1.0 / (
-            self.theta ** (torch.arange(0, self.dim, 2, device=device).float() / self.dim)
+        return compute_rope_from_position_ids(
+            ids, sum(self.axes_dim), self.theta, axes_dim=self.axes_dim
         )
-        t = torch.arange(seq_len, device=device).float()
-        freqs = torch.outer(t, inv_freq)
-        freqs = torch.cat([freqs, freqs], dim=-1)
-
-        return freqs.cos().to(dtype), freqs.sin().to(dtype)
 
 
 class CombinedTimestepGuidanceEmbeddings(nn.Module):
@@ -240,94 +183,89 @@ def compute_axis_freqs(
     positions: torch.Tensor,
     dim: int,
     theta: float = 10000.0,
-) -> torch.Tensor:
-    """Compute rotary frequencies for a single axis.
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute rotary cos/sin for a single axis.
+
+    Matches HuggingFace get_1d_rotary_pos_embed with repeat_interleave_real=True:
+    - Computes dim//2 base frequencies
+    - repeat_interleave(2) to get dim values where each freq is adjacent-duplicated
 
     Args:
-        positions: Position values [B, seq].
-        dim: Number of frequency dimensions to compute.
+        positions: Position values [seq] or [B, seq].
+        dim: Number of output dimensions (must be even).
         theta: Base for frequency computation.
 
     Returns:
-        Frequencies tensor [B, seq, dim].
+        Tuple of (cos, sin) each of shape matching positions + [dim].
     """
     if dim == 0:
-        return torch.zeros(
-            positions.shape[0], positions.shape[1], 0,
-            device=positions.device, dtype=positions.dtype
-        )
+        shape = list(positions.shape) + [0]
+        z = torch.zeros(shape, device=positions.device, dtype=torch.float32)
+        return z, z
 
-    # Compute inverse frequencies for this axis
+    # Compute inverse frequencies for half the dimensions
     inv_freq = 1.0 / (
         theta ** (torch.arange(0, dim, 2, device=positions.device).float() / dim)
     )
 
-    # Compute frequencies: [B, seq] x [dim/2] -> [B, seq, dim/2]
-    freqs = positions.unsqueeze(-1) * inv_freq.unsqueeze(0).unsqueeze(0)
+    # Compute outer product: positions x inv_freq
+    if positions.dim() == 1:
+        # [seq] x [dim//2] -> [seq, dim//2]
+        freqs = torch.outer(positions.float(), inv_freq)
+    else:
+        # [B, seq] x [dim//2] -> [B, seq, dim//2]
+        freqs = positions.float().unsqueeze(-1) * inv_freq
 
-    # Double for sin/cos pairs: [B, seq, dim]
-    freqs = torch.cat([freqs, freqs], dim=-1)
+    # Adjacent-pair duplication (repeat_interleave) matching HuggingFace
+    # Each frequency is duplicated for the adjacent real/imaginary pair
+    cos_freqs = freqs.cos().repeat_interleave(2, dim=-1).float()
+    sin_freqs = freqs.sin().repeat_interleave(2, dim=-1).float()
 
-    return freqs
+    return cos_freqs, sin_freqs
 
 
 def compute_rope_from_position_ids(
     position_ids: torch.Tensor,
     dim: int,
     theta: float = 10000.0,
+    axes_dim: Optional[Tuple[int, ...]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute rotary embeddings from explicit 4D position IDs.
+    """Compute rotary embeddings from 3D position IDs.
 
-    Allocates embedding dimensions across t, h, w, l axes for proper
-    spatial-temporal encoding of target vs reference images.
+    Matches HuggingFace FluxPosEmbed: processes each axis independently
+    with get_1d_rotary_pos_embed(repeat_interleave_real=True), then
+    concatenates the cos/sin along the feature dimension.
 
-    The dimension allocation is:
-    - dim_t: dim // 8 (temporal, smaller since binary for most cases)
-    - dim_h: dim // 4 (height, important for spatial structure)
-    - dim_w: dim // 4 (width, important for spatial structure)
-    - dim_l: remaining (sequence index)
+    Default axes_dim for FLUX.1 is (16, 56, 56) = 128 total (head_dim).
+    Position IDs are 3D: [stream_id, height, width] where stream_id=0
+    for target, stream_id=1 for reference (Kontext mode).
 
     Args:
-        position_ids: 4D position IDs [B, seq, 4] with [t, h, w, l].
-        dim: Total embedding dimension (must be even).
+        position_ids: Position IDs [B, seq, 3] or [seq, 3] with [stream, h, w].
+            Also accepts 4D [t, h, w, l] for backward compatibility (l is ignored).
+        dim: Total embedding dimension per head (e.g. 128 for FLUX.1).
         theta: Base for frequency computation.
+        axes_dim: Per-axis dimension allocation. Defaults to (16, 56, 56) for FLUX.1.
 
     Returns:
-        Tuple of (cos, sin) embeddings, each [B, seq, dim].
+        Tuple of (cos, sin) embeddings, each [B, seq, dim] or [seq, dim].
     """
-    B, seq_len, _ = position_ids.shape
+    if axes_dim is None:
+        axes_dim = (16, 56, 56)
 
-    # Allocate dimensions across axes
-    # t gets smallest allocation (binary 0/1 in most cases)
-    # h and w get equal allocation for spatial structure
-    # l gets remainder
-    dim_t = dim // 8
-    dim_h = dim // 4
-    dim_w = dim // 4
-    dim_l = dim - dim_t - dim_h - dim_w
+    n_axes = min(position_ids.shape[-1], len(axes_dim))
 
-    # Ensure even dimensions for sin/cos pairs
-    dim_t = (dim_t // 2) * 2
-    dim_h = (dim_h // 2) * 2
-    dim_w = (dim_w // 2) * 2
-    dim_l = dim - dim_t - dim_h - dim_w
-    dim_l = (dim_l // 2) * 2
+    cos_parts = []
+    sin_parts = []
+    for i in range(n_axes):
+        cos_i, sin_i = compute_axis_freqs(position_ids[..., i], axes_dim[i], theta)
+        cos_parts.append(cos_i)
+        sin_parts.append(sin_i)
 
-    # If dimensions don't add up exactly, adjust dim_l
-    total = dim_t + dim_h + dim_w + dim_l
-    if total < dim:
-        dim_l += (dim - total)
+    freqs_cos = torch.cat(cos_parts, dim=-1)
+    freqs_sin = torch.cat(sin_parts, dim=-1)
 
-    # Compute frequencies for each axis
-    freqs_t = compute_axis_freqs(position_ids[..., 0], dim_t, theta)
-    freqs_h = compute_axis_freqs(position_ids[..., 1], dim_h, theta)
-    freqs_w = compute_axis_freqs(position_ids[..., 2], dim_w, theta)
-    freqs_l = compute_axis_freqs(position_ids[..., 3], dim_l, theta)
-
-    # Concatenate all frequencies: [B, seq, dim]
-    freqs = torch.cat([freqs_t, freqs_h, freqs_w, freqs_l], dim=-1)
-
-    return freqs.cos(), freqs.sin()
+    return freqs_cos, freqs_sin
 
 
 def create_image_position_ids(
@@ -338,7 +276,7 @@ def create_image_position_ids(
     dtype: torch.dtype,
     time_offset: float = 0.0,
 ) -> torch.Tensor:
-    """Create 4D position IDs for image patches.
+    """Create 3D position IDs for image patches.
 
     This is a convenience function for creating position IDs directly
     in the embedding module (useful for text-to-image without Kontext).
@@ -349,26 +287,19 @@ def create_image_position_ids(
         width: Spatial width in patches.
         device: Target device.
         dtype: Data type.
-        time_offset: Time dimension value (0.0 for target).
+        time_offset: Stream index value (0.0 for target, 1.0 for reference).
 
     Returns:
-        Position IDs tensor of shape [B, height*width, 4].
+        Position IDs tensor of shape [B, height*width, 3].
     """
-    num_patches = height * width
+    # Match HuggingFace: create [height, width, 3] then reshape
+    ids = torch.zeros(height, width, 3, device=device, dtype=dtype)
+    ids[..., 0] = time_offset  # stream index
+    ids[..., 1] = ids[..., 1] + torch.arange(height, device=device, dtype=dtype)[:, None]
+    ids[..., 2] = ids[..., 2] + torch.arange(width, device=device, dtype=dtype)[None, :]
 
-    # Create grid indices
-    y_indices = torch.arange(height, device=device)
-    x_indices = torch.arange(width, device=device)
-    y_grid, x_grid = torch.meshgrid(y_indices, x_indices, indexing="ij")
+    # Reshape to [height*width, 3]
+    ids = ids.reshape(height * width, 3)
 
-    # Create position components
-    t = torch.full((num_patches,), time_offset, device=device, dtype=dtype)
-    h = y_grid.reshape(-1).to(dtype)
-    w = x_grid.reshape(-1).to(dtype)
-    l = torch.zeros(num_patches, device=device, dtype=dtype)
-
-    # Stack: [num_patches, 4]
-    ids = torch.stack([t, h, w, l], dim=-1)
-
-    # Expand to batch: [B, num_patches, 4]
+    # Expand to batch: [B, height*width, 3]
     return ids.unsqueeze(0).expand(batch_size, -1, -1)

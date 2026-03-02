@@ -10,12 +10,20 @@ FLUX.1 variants (dev, schnell) use:
 Image Editing Support:
 - Kontext Mode: Reference image editing via sequence-wise concatenation
   - img_cond_seq is concatenated along sequence dimension (dim=1)
-  - 4D Position IDs [t, h, w, l] distinguish target (t=0) from reference (t=1)
+  - 3D Position IDs [stream, h, w] distinguish target (stream=0) from reference (stream=1)
 - Fill Mode: NOT supported in FLUX.1
 
 HuggingFace Alignment:
 This transformer uses naming conventions compatible with HuggingFace's
 FluxTransformer2DModel for direct weight loading from pretrained checkpoints.
+
+RoPE Implementation (matches HuggingFace exactly):
+- Position IDs are 3D: [stream, h, w] with axes_dim=(16, 56, 56) = 128 total
+- Text position IDs are all zeros [0, 0, 0] -> identity RoPE (no rotation)
+- Single unified image_rotary_emb = pos_embed(cat(txt_ids, img_ids))
+- Same rotary_emb passed to both joint and single blocks
+- Joint blocks split the emb internally into txt and img portions
+- Timestep is multiplied by 1000 inside the model (caller passes 0-1 range)
 
 Key naming mappings:
 - transformer_blocks (not joint_blocks)
@@ -40,9 +48,12 @@ from ..components.embeddings import (
 from ..components.layers import AdaLayerNormContinuous
 from ...components.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
-    RotaryEmbedding,
 )
 from .conditioning import create_position_ids
+
+
+# Default FLUX.1 RoPE axes dimensions matching HuggingFace
+FLUX1_AXES_DIM = (16, 56, 56)
 
 
 class Flux1Transformer(nn.Module):
@@ -102,6 +113,10 @@ class Flux1Transformer(nn.Module):
         self.in_channels = in_channels
         self.guidance_embeds = guidance_embeds
 
+        # RoPE configuration matching HuggingFace
+        self.axes_dim = tuple(config.get("axes_dims_rope", FLUX1_AXES_DIM))
+        self.rope_theta = config.get("rope_theta", 10000.0)
+
         # Input projection for latents
         self.x_embedder = nn.Linear(in_channels, hidden_size)
 
@@ -115,10 +130,6 @@ class Flux1Transformer(nn.Module):
             pooled_projection_dim=pooled_projection_dim,
             guidance_embeds=guidance_embeds,
         )
-
-        # Positional embedding (RoPE)
-        head_dim = hidden_size // num_heads
-        self.rope = RotaryEmbedding(head_dim)
 
         # Joint attention blocks (HF naming: transformer_blocks)
         self.transformer_blocks = nn.ModuleList([
@@ -151,113 +162,120 @@ class Flux1Transformer(nn.Module):
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
         guidance: Optional[torch.Tensor] = None,
+        img_ids: Optional[torch.Tensor] = None,
+        txt_ids: Optional[torch.Tensor] = None,
         img_cond_seq: Optional[torch.Tensor] = None,
         img_cond_seq_ids: Optional[torch.Tensor] = None,
         return_hidden_states_at: Optional[List[int]] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[int, torch.Tensor]]]:
-        """Forward pass.
+        """Forward pass matching HuggingFace FluxTransformer2DModel.
+
+        RoPE flow (matches HuggingFace exactly):
+        1. Create txt_ids = zeros(txt_seq, 3) and img_ids from spatial grid
+        2. Concatenate: ids = cat(txt_ids, img_ids)  (along seq dim)
+        3. Compute unified image_rotary_emb = pos_embed(ids)
+        4. Pass same image_rotary_emb to both joint and single blocks
+        5. Joint blocks split the emb into txt and img portions internally
+
+        Timestep scaling:
+        - Caller passes timestep in [0, 1] range
+        - Model internally scales by 1000 (matching HuggingFace)
 
         Args:
             hidden_states: Latent tensor [B, seq_len, in_channels].
-            timestep: Timestep values [B].
+            timestep: Timestep values [B] in [0, 1] range.
             encoder_hidden_states: Text embeddings [B, txt_seq, joint_attention_dim].
-                Will be projected from joint_attention_dim (4096) to hidden_size (3072).
             pooled_projections: Pooled text embeddings [B, pooled_dim].
-            guidance: Optional guidance scale [B].
+            guidance: Optional guidance scale [B] in raw scale (e.g. 1.0).
+            img_ids: Optional pre-computed image position IDs [B, img_seq, 3].
+                If None, auto-computed from spatial dimensions.
+            txt_ids: Optional pre-computed text position IDs [B, txt_seq, 3].
+                If None, uses zeros (matching HuggingFace default).
             img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
-                Concatenated along sequence dimension.
-            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 4].
-                4D format [t, h, w, l] used for positional encoding.
-            return_hidden_states_at: Optional list of joint block indices at which to
-                capture hidden states. When None, behavior is unchanged and returns
-                a single tensor. When set, returns a tuple of (output, captured_states)
-                where captured_states maps block index to hidden state tensor.
+            img_cond_seq_ids: Position IDs for Kontext ref [B, ref_seq, 3].
+            return_hidden_states_at: Optional list of joint block indices to capture.
 
         Returns:
-            If return_hidden_states_at is None:
-                Predicted output [B, seq_len, in_channels].
-            If return_hidden_states_at is set:
-                Tuple of (output, captured_hidden_states) where captured_hidden_states
-                is Dict[int, Tensor] mapping block index to hidden states.
-            Note: If Kontext mode, output includes both base and reference tokens.
-            The caller (pipeline) is responsible for slicing to get only base tokens.
+            Predicted output [B, img_seq, in_channels] (includes ref tokens if Kontext).
+            If return_hidden_states_at is set, returns (output, captured_states).
         """
         B = hidden_states.shape[0]
         device = hidden_states.device
         dtype = hidden_states.dtype
 
-        # Embed inputs
+        # === Timestep scaling (HuggingFace does this inside the model) ===
+        timestep = timestep.to(dtype) * 1000
+        if guidance is not None:
+            guidance = guidance.to(dtype) * 1000
+
+        # === Embed inputs ===
         hidden_states = self.x_embedder(hidden_states)
 
-        # Compute base image position IDs (time_offset=0 for target image)
+        # === Compute image position IDs if not provided ===
         base_seq_len = hidden_states.shape[1]
-        h = w = int(math.sqrt(base_seq_len))
-        if h * w != base_seq_len:
-            h, w = 1, base_seq_len
+        if img_ids is None:
+            h = w = int(math.sqrt(base_seq_len))
+            if h * w != base_seq_len:
+                h, w = 1, base_seq_len
+            img_ids = create_position_ids(
+                batch_size=B, height=h, width=w,
+                device=device, dtype=dtype, time_offset=0.0,
+            )
 
-        base_position_ids = create_position_ids(
-            batch_size=B,
-            height=h,
-            width=w,
-            device=device,
-            dtype=dtype,
-            time_offset=0.0,  # Target image uses time_offset=0
-        )
-
-        # Handle Kontext mode (sequence-wise concatenation)
+        # === Handle Kontext mode (sequence-wise concatenation) ===
         if img_cond_seq is not None:
-            # Embed reference image sequence
             ref_embedded = self.x_embedder(img_cond_seq)
-            # Concatenate along sequence dimension
             hidden_states = torch.cat([hidden_states, ref_embedded], dim=1)
 
-            # Concatenate position IDs if provided
             if img_cond_seq_ids is not None:
-                combined_position_ids = torch.cat([base_position_ids, img_cond_seq_ids], dim=1)
+                img_ids = torch.cat([img_ids, img_cond_seq_ids], dim=1)
             else:
-                # Create default position IDs for reference with time_offset=1.0
                 ref_seq_len = img_cond_seq.shape[1]
                 ref_h = ref_w = int(math.sqrt(ref_seq_len))
                 if ref_h * ref_w != ref_seq_len:
                     ref_h, ref_w = 1, ref_seq_len
-                ref_position_ids = create_position_ids(
-                    batch_size=B,
-                    height=ref_h,
-                    width=ref_w,
-                    device=device,
-                    dtype=dtype,
-                    time_offset=1.0,  # Reference image uses time_offset=1.0
+                ref_ids = create_position_ids(
+                    batch_size=B, height=ref_h, width=ref_w,
+                    device=device, dtype=dtype, time_offset=1.0,
                 )
-                combined_position_ids = torch.cat([base_position_ids, ref_position_ids], dim=1)
-        else:
-            combined_position_ids = base_position_ids
+                img_ids = torch.cat([img_ids, ref_ids], dim=1)
 
-        # Combined time/guidance/text embedding (using HF-aligned time_text_embed)
+        # === Text position IDs (all zeros = identity RoPE) ===
+        txt_seq_len = encoder_hidden_states.shape[1]
+        if txt_ids is None:
+            txt_ids = torch.zeros(B, txt_seq_len, 3, device=device, dtype=dtype)
+
+        # === Unified RoPE: cat(txt_ids, img_ids) then compute ===
+        # This matches HuggingFace: ids = cat(txt_ids, img_ids); emb = pos_embed(ids)
+        combined_ids = torch.cat([txt_ids, img_ids], dim=1)
+        image_rotary_emb = compute_rope_from_position_ids(
+            combined_ids, sum(self.axes_dim), self.rope_theta,
+            axes_dim=self.axes_dim,
+        )
+
+        # === Combined time/guidance/text embedding ===
         temb = self.time_text_embed(
             timestep=timestep,
             pooled_projection=pooled_projections,
             guidance=guidance,
         )
 
-        # Compute rotary embeddings from 4D position IDs
-        img_seq_len = hidden_states.shape[1]  # Includes Kontext if present
-        txt_seq_len = encoder_hidden_states.shape[1]
-
-        # Get head dimension for RoPE
-        head_dim = self.hidden_size // self.num_heads
-
-        # Compute image RoPE from position IDs (uses 4D [t, h, w, l] format)
-        img_rotary_emb = compute_rope_from_position_ids(
-            combined_position_ids, head_dim, self.rope.theta
-        )
-
-        # Text uses standard 1D RoPE
-        txt_rotary_emb = self.rope(txt_seq_len, device)
-
-        # Project text embeddings from T5 dim (4096) to hidden dim (3072)
+        # === Project text embeddings ===
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
-        # Joint attention blocks (using HF-aligned transformer_blocks)
+        # === Split rotary emb for joint blocks ===
+        # Joint blocks process txt and img separately, so split the unified emb
+        img_seq_len = hidden_states.shape[1]
+        txt_rotary_emb = (
+            image_rotary_emb[0][:, :txt_seq_len],
+            image_rotary_emb[1][:, :txt_seq_len],
+        )
+        img_rotary_emb = (
+            image_rotary_emb[0][:, txt_seq_len:],
+            image_rotary_emb[1][:, txt_seq_len:],
+        )
+
+        # === Joint attention blocks ===
         txt_hidden = encoder_hidden_states
         captured_hidden_states = {} if return_hidden_states_at is not None else None
         for block_idx, block in enumerate(self.transformer_blocks):
@@ -271,26 +289,17 @@ class Flux1Transformer(nn.Module):
             if captured_hidden_states is not None and block_idx in return_hidden_states_at:
                 captured_hidden_states[block_idx] = hidden_states
 
-        # Concatenate for single stream
+        # === Concatenate for single stream ===
         hidden_states = torch.cat([txt_hidden, hidden_states], dim=1)
 
-        # Create combined position IDs for single stream (text + image)
-        txt_position_ids = torch.zeros(B, txt_seq_len, 4, device=device, dtype=dtype)
-        txt_position_ids[..., 3] = torch.arange(txt_seq_len, device=device).float()
-
-        combined_stream_position_ids = torch.cat([txt_position_ids, combined_position_ids], dim=1)
-        combined_rotary_emb = compute_rope_from_position_ids(
-            combined_stream_position_ids, head_dim, self.rope.theta
-        )
-
-        # Single stream blocks (using HF-aligned single_transformer_blocks)
+        # === Single stream blocks (use full unified rotary emb) ===
         for block in self.single_transformer_blocks:
-            hidden_states = block(hidden_states, temb, combined_rotary_emb)
+            hidden_states = block(hidden_states, temb, image_rotary_emb)
 
-        # Extract image tokens (all image tokens including Kontext if present)
+        # === Extract image tokens (remove text prefix) ===
         hidden_states = hidden_states[:, txt_seq_len:]
 
-        # Project output (HF-aligned: norm_out takes temb as conditioning)
+        # === Project output ===
         hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)
 

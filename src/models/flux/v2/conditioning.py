@@ -5,7 +5,7 @@ This module provides utilities for image editing with FLUX.2:
 1. Kontext Mode: Reference image editing via sequence-wise concatenation
    - Encode reference images via VAE
    - Rearrange to sequence format
-   - Create 4D position IDs [t, h, w, l] with time_offset=1.0 for references
+   - Create 3D position IDs [stream, h, w] with stream=1 for references
    - Concatenate along sequence dimension in denoise loop
 
 2. Fill Mode: Inpainting via channel-wise concatenation
@@ -13,11 +13,10 @@ This module provides utilities for image editing with FLUX.2:
    - Encode and add mask as extra channels
    - Concatenate along channel dimension in denoise loop
 
-Position ID Format (4D):
-- t: Temporal/time offset (0.0 for target image, 1.0+ for reference images)
+Position ID Format (3D) — matches HuggingFace diffusers:
+- stream: Stream/image index (0 for target image, 1 for reference in Kontext)
 - h: Height coordinate in patches
 - w: Width coordinate in patches
-- l: Sequence/layer index within patch position
 """
 
 from typing import Optional, Tuple
@@ -108,20 +107,16 @@ def create_position_ids(
     time_offset: float = 0.0,
     sequence_index: int = 0,
 ) -> torch.Tensor:
-    """Create 4D position IDs [t, h, w, l] for FLUX.2.
+    """Create 3D position IDs [stream, h, w] matching HuggingFace FLUX.
 
-    Position IDs have shape [B, seq, 4] where:
-    - ids[..., 0] = t (temporal/time offset, 0 for target, >0 for reference)
+    Position IDs have shape [B, seq, 3] where:
+    - ids[..., 0] = stream index (0 for target, 1 for reference in Kontext)
     - ids[..., 1] = h (height coordinate in patches)
     - ids[..., 2] = w (width coordinate in patches)
-    - ids[..., 3] = l (sequence index within patch)
 
-    In FLUX Kontext mode:
-    - Target/generated images use time_offset=0.0
-    - Reference images use time_offset=1.0 (or higher for multiple refs)
-
-    This 4D format enables proper positional encoding that distinguishes
-    between target and reference images in the spatial-temporal space.
+    This matches HuggingFace's _prepare_latent_image_ids which creates
+    (height*width, 3) tensors with [0, y, x] for target images and
+    sets ids[..., 0] = 1 for Kontext reference images.
 
     Args:
         batch_size: Batch size.
@@ -129,29 +124,22 @@ def create_position_ids(
         width: Spatial width in patches.
         device: Target device.
         dtype: Data type.
-        time_offset: Time dimension value (0.0 for target, 1.0 for reference).
-        sequence_index: Sequence/layer index within each patch position.
+        time_offset: Stream/time index (0.0 for target, 1.0 for reference).
+        sequence_index: Unused, kept for backward compatibility.
 
     Returns:
-        Position IDs tensor of shape [B, height*width, 4].
+        Position IDs tensor of shape [B, height*width, 3].
     """
-    num_patches = height * width
+    # Match HuggingFace: create [height, width, 3] then reshape
+    ids = torch.zeros(height, width, 3, device=device, dtype=dtype)
+    ids[..., 0] = time_offset  # stream index
+    ids[..., 1] = ids[..., 1] + torch.arange(height, device=device, dtype=dtype)[:, None]
+    ids[..., 2] = ids[..., 2] + torch.arange(width, device=device, dtype=dtype)[None, :]
 
-    # Create grid indices
-    y_indices = torch.arange(height, device=device)
-    x_indices = torch.arange(width, device=device)
-    y_grid, x_grid = torch.meshgrid(y_indices, x_indices, indexing="ij")
+    # Reshape to [height*width, 3]
+    ids = ids.reshape(height * width, 3)
 
-    # Create position components
-    t = torch.full((num_patches,), time_offset, device=device, dtype=dtype)
-    h = y_grid.reshape(-1).to(dtype)
-    w = x_grid.reshape(-1).to(dtype)
-    l = torch.full((num_patches,), float(sequence_index), device=device, dtype=dtype)
-
-    # Stack: [num_patches, 4] with order [t, h, w, l]
-    ids = torch.stack([t, h, w, l], dim=-1)
-
-    # Expand to batch: [B, num_patches, 4]
+    # Expand to batch: [B, height*width, 3]
     ids = ids.unsqueeze(0).expand(batch_size, -1, -1)
 
     return ids
@@ -168,12 +156,12 @@ def prepare_kontext_conditioning(
     """Prepare Kontext conditioning from reference images.
 
     Encodes reference images through VAE and converts to sequence format
-    with appropriate 4D position IDs [t, h, w, l].
+    with appropriate 3D position IDs [stream, h, w].
 
     In FLUX Kontext:
     1. Reference images are encoded via VAE
     2. Latents are patchified to sequence format
-    3. Position IDs have time_offset=1.0 (vs 0.0 for target)
+    3. Position IDs have stream=1 (vs 0 for target)
     4. In denoise loop, ref sequence is concatenated with base sequence
 
     Args:
@@ -187,7 +175,7 @@ def prepare_kontext_conditioning(
     Returns:
         Tuple of:
         - img_cond_seq: Encoded reference sequence [B, ref_seq, patch_dim]
-        - img_cond_seq_ids: Position IDs [B, ref_seq, 4]
+        - img_cond_seq_ids: Position IDs [B, ref_seq, 3]
     """
     batch_size = reference_images.shape[0]
 
@@ -219,7 +207,7 @@ def prepare_kontext_conditioning(
     # Convert to sequence format
     img_cond_seq = rearrange_latent_to_sequence(latent, patch_size=patch_size)
 
-    # Create 4D position IDs with time_offset for reference images
+    # Create 3D position IDs with stream index for reference images
     img_cond_seq_ids = create_position_ids(
         batch_size=batch_size,
         height=h,
