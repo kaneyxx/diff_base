@@ -10,6 +10,13 @@ from .model import Flux2Model
 from .transformer import Flux2Transformer
 from .vae import Flux2VAE
 from .text_encoder import Flux2TextEncoders
+from .blocks import (
+    Flux2TransformerBlock,
+    Flux2SingleTransformerBlock,
+    Flux2Attention,
+    Flux2ParallelSelfAttention,
+    Flux2FeedForward,
+)
 from .conditioning import (
     rearrange_latent_to_sequence,
     rearrange_sequence_to_latent,
@@ -25,6 +32,12 @@ __all__ = [
     "Flux2Transformer",
     "Flux2VAE",
     "Flux2TextEncoders",
+    # Block components
+    "Flux2TransformerBlock",
+    "Flux2SingleTransformerBlock",
+    "Flux2Attention",
+    "Flux2ParallelSelfAttention",
+    "Flux2FeedForward",
     # Conditioning utilities
     "rearrange_latent_to_sequence",
     "rearrange_sequence_to_latent",

@@ -84,7 +84,7 @@ class Flux1Model(BaseDiffusionModel):
             pooled_projections: CLIP pooled embeddings [B, pool_dim].
             guidance: Optional guidance scale [B].
             img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
-            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 4].
+            img_cond_seq_ids: Position IDs for Kontext conditioning [B, ref_seq, 3].
             **kwargs: Additional arguments.
 
         Returns:
@@ -125,7 +125,7 @@ class Flux1Model(BaseDiffusionModel):
         Returns:
             Dictionary with:
             - img_cond_seq: Encoded reference sequence [B, ref_seq, patch_dim]
-            - img_cond_seq_ids: Position IDs [B, ref_seq, 4]
+            - img_cond_seq_ids: Position IDs [B, ref_seq, 3]
 
         Raises:
             ValueError: If mode is not 'kontext'.

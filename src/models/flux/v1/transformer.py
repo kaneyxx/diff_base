@@ -39,6 +39,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
+from ..base_transformer import FluxTransformerBase
 from ..components.attention import FluxJointTransformerBlock, FluxSingleTransformerBlock
 from ..components.embeddings import (
     FluxPosEmbed,
@@ -56,7 +57,7 @@ from .conditioning import create_position_ids
 FLUX1_AXES_DIM = (16, 56, 56)
 
 
-class Flux1Transformer(nn.Module):
+class Flux1Transformer(FluxTransformerBase):
     """FLUX.1 DiT (Diffusion Transformer) architecture.
 
     Configuration for FLUX.1 variants:

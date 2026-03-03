@@ -188,3 +188,49 @@ class RMSNorm(nn.Module):
         """Forward pass."""
         rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
         return x / rms * self.weight
+
+
+class Flux2Modulation(nn.Module):
+    """Shared modulation for FLUX.2 transformer blocks.
+
+    FLUX.2 uses shared modulation across all blocks (unlike FLUX.1 which has
+    per-block AdaLayerNormZero). Three instances are used:
+    - double_stream_modulation_img (mod_param_sets=2, for attn+FF)
+    - double_stream_modulation_txt (mod_param_sets=2, for attn+FF)
+    - single_stream_modulation (mod_param_sets=1, parallel attn+FF)
+
+    HuggingFace state dict key: {name}.linear.weight
+    """
+
+    def __init__(self, dim: int, mod_param_sets: int = 2, bias: bool = False):
+        """Initialize Flux2Modulation.
+
+        Args:
+            dim: Hidden dimension.
+            mod_param_sets: Number of modulation sets (2 for double, 1 for single).
+            bias: Whether to use bias in linear projection.
+        """
+        super().__init__()
+        self.mod_param_sets = mod_param_sets
+        self.linear = nn.Linear(dim, dim * 3 * self.mod_param_sets, bias=bias)
+        self.act_fn = nn.SiLU()
+
+    def forward(self, temb: torch.Tensor) -> Tuple:
+        """Compute modulation parameters.
+
+        Args:
+            temb: Conditioning embedding [B, dim].
+
+        Returns:
+            Tuple of tuples, each containing (shift, scale, gate) for one set.
+            For mod_param_sets=2: ((shift1, scale1, gate1), (shift2, scale2, gate2))
+            For mod_param_sets=1: ((shift, scale, gate),)
+        """
+        mod = self.act_fn(temb)
+        mod = self.linear(mod)
+        if mod.ndim == 2:
+            mod = mod.unsqueeze(1)
+        mod_params = torch.chunk(mod, 3 * self.mod_param_sets, dim=-1)
+        return tuple(
+            mod_params[3 * i : 3 * (i + 1)] for i in range(self.mod_param_sets)
+        )

@@ -79,7 +79,7 @@ def validate_config(config: DictConfig) -> None:
         )
 
     # Validate model type
-    valid_model_types = ["sdxl", "flux"]
+    valid_model_types = ["sdxl", "flux", "flux2", "sd3"]
     model_type = config.model.type
     if model_type not in valid_model_types:
         raise ValueError(
@@ -90,7 +90,8 @@ def validate_config(config: DictConfig) -> None:
     # Validate training method
     valid_methods = [
         "lora", "full_finetune", "dreambooth",
-        "controlnet", "textual_inversion", "t2i_adapter"
+        "controlnet", "textual_inversion", "t2i_adapter",
+        "kontext_lora",
     ]
     method = config.training.method
     if method not in valid_methods:

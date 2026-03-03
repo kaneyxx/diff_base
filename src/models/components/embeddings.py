@@ -73,6 +73,7 @@ class TimestepEmbedding(nn.Module):
         act_fn: str = "silu",
         out_dim: Optional[int] = None,
         post_act_fn: Optional[str] = None,
+        sample_proj_bias: bool = True,
     ):
         """Initialize timestep embedding projection.
 
@@ -82,10 +83,11 @@ class TimestepEmbedding(nn.Module):
             act_fn: Activation function.
             out_dim: Optional different output dimension.
             post_act_fn: Optional activation after output.
+            sample_proj_bias: Whether to use bias in linear layers.
         """
         super().__init__()
 
-        self.linear_1 = nn.Linear(in_channels, time_embed_dim)
+        self.linear_1 = nn.Linear(in_channels, time_embed_dim, bias=sample_proj_bias)
 
         if act_fn == "silu":
             self.act = nn.SiLU()
@@ -97,7 +99,7 @@ class TimestepEmbedding(nn.Module):
             raise ValueError(f"Unknown activation: {act_fn}")
 
         out_dim = out_dim or time_embed_dim
-        self.linear_2 = nn.Linear(time_embed_dim, out_dim)
+        self.linear_2 = nn.Linear(time_embed_dim, out_dim, bias=sample_proj_bias)
 
         self.post_act = None
         if post_act_fn == "silu":

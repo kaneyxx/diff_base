@@ -90,6 +90,40 @@ def create_flux_model(config: DictConfig) -> "BaseDiffusionModel":
         )
 
 
+def create_flux_transformer(
+    version: str,
+    config: DictConfig,
+    variant: str = "dev",
+) -> "FluxTransformerBase":
+    """Create a FLUX transformer by version.
+
+    This is the recommended way to instantiate transformers for training code.
+    Returns a FluxTransformerBase subclass, so training code can use the
+    unified forward() signature without caring about the FLUX version.
+
+    Args:
+        version: "v1" or "v2".
+        config: Transformer configuration (DictConfig or dict-like).
+        variant: Model variant ("dev", "schnell", "klein-4b", "klein-9b").
+
+    Returns:
+        FluxTransformerBase subclass instance.
+
+    Raises:
+        ValueError: If version is not recognized.
+    """
+    if version == "v1":
+        from .v1.transformer import Flux1Transformer
+        return Flux1Transformer(config, variant)
+    elif version == "v2":
+        from .v2.transformer import Flux2Transformer
+        return Flux2Transformer(config, variant)
+    else:
+        raise ValueError(
+            f"Unknown FLUX version: {version}. Supported: 'v1' (FLUX.1), 'v2' (FLUX.2)"
+        )
+
+
 def get_available_variants() -> dict[str, tuple[str, str]]:
     """Get all available Flux variants.
 
@@ -100,6 +134,7 @@ def get_available_variants() -> dict[str, tuple[str, str]]:
 
 
 # Backwards compatibility - expose old names
+from .base_transformer import FluxTransformerBase
 from .v1 import Flux1Model, Flux1Transformer, Flux1VAE, Flux1TextEncoders
 from .v2 import Flux2Model, Flux2Transformer, Flux2VAE, Flux2TextEncoders
 
@@ -112,8 +147,11 @@ FluxTextEncoders = Flux1TextEncoders
 __all__ = [
     # Factory
     "create_flux_model",
+    "create_flux_transformer",
     "get_available_variants",
     "FLUX_VARIANTS",
+    # Base interface
+    "FluxTransformerBase",
     # FLUX.1 (v1)
     "Flux1Model",
     "Flux1Transformer",

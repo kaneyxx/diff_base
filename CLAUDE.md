@@ -36,6 +36,33 @@ A unified training framework for diffusion models supporting multiple architectu
 - **Modular architecture**: Each component is independently swappable
 - **Training method agnostic**: Same model code works for all approaches
 
+### Unified Model Interface
+
+Training code should use the version-agnostic factory to create transformers:
+
+```python
+from src.models.flux import create_flux_transformer
+from src.models.flux.conditioning import create_position_ids, rearrange_latent_to_sequence
+
+# Create transformer (same interface for v1 and v2)
+transformer = create_flux_transformer(version="v1", config=config, variant="dev")
+
+# Forward pass uses unified signature
+output = transformer(
+    hidden_states=noisy_latent,
+    timestep=timesteps,          # [0, 1] range, model scales internally
+    encoder_hidden_states=text_embeds,
+    pooled_projections=pooled_embeds,
+    guidance=guidance,            # Optional
+    img_cond_seq=img_cond_seq,    # Optional Kontext conditioning
+    img_cond_seq_ids=img_cond_ids,
+    return_hidden_states_at=[4, 8],  # Optional REPA capture
+)
+```
+
+Both `Flux1Transformer` and `Flux2Transformer` inherit from `FluxTransformerBase`
+which defines the shared interface.
+
 ---
 
 ## Directory Structure
@@ -62,7 +89,9 @@ diff_base/
 │   │   ├── base.py              # Abstract base model class
 │   │   ├── sdxl/                # SDXL implementation
 │   │   ├── flux/                # FLUX implementations
-│   │   │   ├── __init__.py
+│   │   │   ├── __init__.py      # Factory: create_flux_transformer()
+│   │   │   ├── base_transformer.py  # FluxTransformerBase ABC
+│   │   │   ├── conditioning.py  # Unified conditioning interface
 │   │   │   ├── v1/              # FLUX.1 (dev, schnell)
 │   │   │   │   ├── model.py
 │   │   │   │   ├── transformer.py
@@ -71,14 +100,15 @@ diff_base/
 │   │   │   │   └── conditioning.py  # Kontext support
 │   │   │   ├── v2/              # FLUX.2 (dev, klein)
 │   │   │   │   ├── model.py
-│   │   │   │   ├── transformer.py
+│   │   │   │   ├── transformer.py   # HF-aligned Flux2Transformer
+│   │   │   │   ├── blocks.py        # Flux2TransformerBlock, Flux2SingleTransformerBlock
 │   │   │   │   ├── vae.py
 │   │   │   │   ├── text_encoder.py
 │   │   │   │   └── conditioning.py  # Kontext + Fill support
 │   │   │   └── components/      # Shared FLUX components
-│   │   │       ├── attention.py
-│   │   │       ├── embeddings.py
-│   │   │       └── layers.py
+│   │   │       ├── attention.py # FLUX.1 attention blocks
+│   │   │       ├── embeddings.py # RoPE, FluxPosEmbed
+│   │   │       └── layers.py    # AdaLayerNorm, Flux2Modulation
 │   │   ├── sd3/                 # SD3.5 implementation
 │   │   └── components/          # Shared components
 │   ├── training/                # Training logic
@@ -158,7 +188,15 @@ model:
 
 ### FLUX.2
 
-Enhanced DiT architecture with QK normalization and Mistral/Qwen text encoders.
+Enhanced DiT architecture with shared modulation, SwiGLU, and Mistral/Qwen text encoders.
+
+**Key architectural differences from FLUX.1:**
+- Shared `Flux2Modulation` across all blocks (not per-block AdaLayerNormZero)
+- SwiGLU feed-forward (not GELU)
+- All bias=False
+- 4D RoPE: axes_dim=(32,32,32,32), rope_theta=2000
+- Single blocks use fused `to_qkv_mlp_proj` projection
+- `Flux2TimestepGuidanceEmbeddings` for time/guidance
 
 **Variants:**
 | Variant | Joint Blocks | Single Blocks | Latent Channels | Text Encoder |
@@ -181,8 +219,9 @@ model:
     num_layers: 8
     num_single_layers: 48
     in_channels: 128  # 32 latent channels * 4
-    qk_norm: true
     guidance_embeds: true
+    axes_dims_rope: [32, 32, 32, 32]
+    rope_theta: 2000
   vae:
     latent_channels: 32
     scaling_factor: 0.3611
@@ -214,19 +253,20 @@ model:
 
 ## Image Editing (Kontext & Fill Modes)
 
-### Position ID Format (4D)
+### Position ID Format
 
-FLUX models use 4D position IDs `[t, h, w, l]` for spatial-temporal encoding:
+FLUX.1 uses 3D position IDs `[stream, h, w]`:
 
 | Dimension | Description | Target Image | Reference Image |
 |-----------|-------------|--------------|-----------------|
-| t | Temporal/time offset | 0.0 | 1.0+ |
+| stream | Stream/image index | 0.0 | 1.0 |
 | h | Height coordinate | 0 to H-1 | 0 to H-1 |
 | w | Width coordinate | 0 to W-1 | 0 to W-1 |
-| l | Sequence index | 0 | 0 |
 
-Position IDs have shape `[B, seq, 4]` and enable the model to distinguish
-between target (generated) and reference (conditioning) images.
+FLUX.1 position IDs have shape `[B, seq, 3]` with axes_dim=(16, 56, 56), rope_theta=10000.
+
+FLUX.2 uses the same 3D position IDs but with 4D RoPE axes_dim=(32, 32, 32, 32),
+rope_theta=2000. The 3D IDs are zero-padded to 4D internally by the transformer.
 
 ### Kontext Mode (Sequence-wise)
 
@@ -241,7 +281,7 @@ img_cond_seq, img_cond_seq_ids = prepare_kontext_conditioning(
     vae=model.vae,
     device=device,
     dtype=dtype,
-    time_offset=1.0,  # Reference uses t=1.0
+    time_offset=1.0,  # Reference uses stream=1.0
 )
 
 # Pass to transformer
@@ -251,7 +291,7 @@ output = model.transformer(
     encoder_hidden_states=text_embeds,
     pooled_projections=pooled_embeds,
     img_cond_seq=img_cond_seq,          # [B, ref_seq, dim]
-    img_cond_seq_ids=img_cond_seq_ids,  # [B, ref_seq, 4]
+    img_cond_seq_ids=img_cond_seq_ids,  # [B, ref_seq, 3]
 )
 ```
 
