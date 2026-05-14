@@ -79,6 +79,10 @@ venv.bak/
 # Claude Code
 .claude/
 CLAUDE.md
+.omc/
+
+# Linter caches
+.ruff_cache/
 
 # Project specific
 outputs/
