@@ -1,0 +1,76 @@
+# NOTE: Replace ${REPO_ROOT} with your cluster path (e.g. /home/you/diff_base),
+#       ${MODEL_HUB_ROOT} with your HuggingFace cache root, and ${DATA_ROOT}
+#       with your BAO/ORION data root before launching. The dev version with
+#       absolute paths lives in the parent dir.
+# Scalability-test LoRA template — variables filled in by train_wrapper.sh from
+# env (LORA_RANK, LORA_ALPHA, BATCH_SIZE, MAX_STEPS, OUT_DIR, GPU_COUNT).
+# Rank / alpha can be varied across sweep iterations to map throughput vs
+# trainable-param scale across 1/2/4 GPU configurations.
+_base_:
+  - ${REPO_ROOT}/configs/models/flux1_kontext.yaml
+  - ${REPO_ROOT}/configs/training/kontext_lora.yaml
+
+experiment:
+  name: "__EXP_NAME__"
+  output_dir: "__OUT_DIR__"
+  seed: 42
+
+model:
+  dtype: "bfloat16"
+  pretrained_path: "${MODEL_HUB_ROOT}/hub/models--black-forest-labs--FLUX.1-Kontext-dev/snapshots/24e9dedc4ef646698dc8eb4e18ae2cec3c9fea0d"
+  # cpu_offload=true paired with cache_text_embeddings=true below: T5/CLIP run
+  # on CPU exactly ONCE per unique caption (ORION = 1 caption per biomarker,
+  # so total = 13 CPU encodes for the entire training run); resulting
+  # embeddings live in EmbeddingCache forever. Net effect: zero T5/CLIP GPU
+  # residency, ~22 GB GPU saved vs naive bf16 GPU-resident T5.
+  text_encoder:
+    cpu_offload: true
+
+training:
+  method: "kontext_lora"
+  epochs: 1
+  max_steps: __MAX_STEPS__
+  batch_size: __BATCH_SIZE__
+  # Pure throughput measurement — 1 forward+backward = 1 step. Effective batch
+  # size scales linearly with GPU count via DDP, NOT via accumulation.
+  gradient_accumulation: 1
+  learning_rate: 1.0e-4
+  max_grad_norm: 1.0
+
+  lora:
+    rank: __LORA_RANK__
+    alpha: __LORA_ALPHA__
+    train_text_encoder: false
+
+  guidance_scale: 3.5
+
+  # Text embedding cache: ORION has one fixed caption per biomarker → 100% hit
+  # rate after first sample. Caches T5-XXL + CLIP-L embeddings to disk/memory,
+  # saving ~22 GB GPU residency on warm runs.
+  cache_text_embeddings: true
+
+data:
+  dataset_type: "orion"
+  train_path: "${DATA_ROOT}/data"
+  train_split_path: "${DATA_ROOT}/dataset/training_splits/CD45_train.json"
+  biomarker: "CD45"
+  # max_samples large enough to never wrap during 150 steps with bs=4×4 GPUs.
+  target_resolution: 512
+  reference_resolution: 512
+  resolution: 512
+  num_workers: 4
+
+hardware:
+  mixed_precision: "bf16"
+  # ON: bs=4 LoRA r16 with T5 on GPU OOMed at 76.97 GB on A100 80 GB (iter 6
+  # job 40046717). Grad checkpointing trades ~10-15% throughput for ~30%
+  # activation-memory reduction; cleaner than dropping batch size for the
+  # multi-GPU scaling story.
+  gradient_checkpointing: true
+  compile: false
+
+logging:
+  wandb:
+    enabled: false
+  tensorboard:
+    enabled: false

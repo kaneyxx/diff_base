@@ -1,0 +1,48 @@
+Reservation gpu_yu_res cgroup memory probe (recorded 2026-05-14)
+
+Node: compute-gc-17-252
+RealMemory       : 1000000 MB (1 TB)
+AllocMem (snapshot): 73728 MB (~72 GB) — 4× surv_blt_r tasks using ~18 GB each
+FreeMem (snapshot) : 33589 MB (~33 GB) — OS-reported free, not SLURM-quotaed
+
+Partition gpu_yu limits (`scontrol show partition gpu_yu`):
+  DefMemPerNode = UNLIMITED
+  MaxMemPerNode = UNLIMITED
+  DefaultTime   = 01:00:00
+  MaxTime       = 30-00:00:00
+
+→ Conclusion: no node-level mem cap from partition. Once our 4 surv_blt_r
+  tasks end (the longest ending ~2026-05-14T18:49), the full 1 TB is
+  available; the sbatch's `--mem=512G` request is comfortably feasible.
+
+cgroup memory limit during earlier smoke (2026-05-14 11:00 on gpu_quad A40):
+  64 GB (ulimit -m 67108864 kB) — OOM-killed when loading 12B FLUX + T5 in fp32.
+  Mitigated yesterday by adding text_encoder.cpu_offload + low_cpu_mem_usage.
+
+Reservation memory budget therefore allows:
+  - text_encoder.cpu_offload OFF (A100 80GB GPU mem fits the model)
+  - --mem=512G partition allocation is safe (huge headroom)
+
+(Replace this paragraph with explicit `sacctmgr` QoS-level cap if RC docs
+provide one for gpu_yu_res specifically; current snapshot shows no QoS-level
+cap on gpu_yu partition.)
+
+== DCGM availability (verified 2026-05-14 via probe job 40044599) ==
+
+Reservation node compute-gc-17-252:
+  - dcgmi NOT on PATH, NOT in /usr/{bin,local/bin}/dcgmi, NOT under
+    /opt/nvidia/dcgm/, NO module match for "dcgm" or "nvidia".
+  - dcgm-exporter NOT running on localhost:9400.
+  - nvidia-smi works (A100-SXM4-80GB visible).
+  - SLURM_GPUS_ON_NODE / SLURM_JOB_GPUS = 1 (cgroup-isolated GPU visible).
+
+→ KempnerPulse cannot use --backend dcgm or --backend prometheus on this
+  cluster. For the Kempner proposal scalability section, we fall back to
+  `gpu_metrics_recorder.sh` (nvidia-smi at 1 Hz with KempnerPulse-aligned
+  CSV header). DCGM-only metrics (tensor_active_pct, sm_occupancy_pct,
+  fp16_pipe_pct, tc_hmma_pct, energy_j, …) are written as "N/A".
+
+→ Action item for HMS RC: enable DCGM on the gpu_yu partition (or stand up
+  dcgm-exporter as a node daemon) so the full KempnerPulse metric set is
+  available in subsequent runs. Until then, the proposal records this
+  limitation explicitly rather than silently producing a degraded report.
