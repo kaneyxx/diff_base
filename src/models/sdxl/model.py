@@ -1,18 +1,16 @@
 """SDXL Model - combines UNet, VAE, and Text Encoders."""
 
 from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn as nn
 from omegaconf import DictConfig
 from safetensors.torch import load_file
 
+from ...utils.logging import get_logger
 from ..base import BaseDiffusionModel
+from .text_encoder import SDXLTextEncoders
 from .unet import SDXLUNet
 from .vae import SDXLVAE
-from .text_encoder import SDXLTextEncoders
-from ...utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -50,7 +48,7 @@ class SDXLModel(BaseDiffusionModel):
         latents: torch.Tensor,
         timesteps: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        added_cond_kwargs: Optional[dict] = None,
+        added_cond_kwargs: dict | None = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through UNet.
@@ -238,7 +236,7 @@ class SDXLModel(BaseDiffusionModel):
         self,
         original_size: tuple[int, int],
         crops_coords_top_left: tuple[int, int] = (0, 0),
-        target_size: Optional[tuple[int, int]] = None,
+        target_size: tuple[int, int] | None = None,
         batch_size: int = 1,
         device: torch.device | str = "cuda",
         dtype: torch.dtype = torch.float32,
@@ -272,8 +270,8 @@ class SDXLModel(BaseDiffusionModel):
 
     def to(
         self,
-        device: Optional[torch.device | str] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
     ):
         """Move model to device/dtype."""
         if device is not None or dtype is not None:

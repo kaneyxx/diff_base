@@ -1,18 +1,17 @@
 """Unified inference pipeline for diffusion models."""
 
 from pathlib import Path
-from typing import Optional, Union
 
 import torch
-from PIL import Image
 from omegaconf import DictConfig
+from PIL import Image
 from tqdm import tqdm
 
+from ..data.transforms import tensor_to_pil
 from ..models import create_model
 from ..schedulers import create_scheduler
 from ..utils.config import load_config
 from ..utils.logging import get_logger
-from ..data.transforms import tensor_to_pil
 
 logger = get_logger(__name__)
 
@@ -94,13 +93,13 @@ class DiffusionPipeline:
     def __call__(
         self,
         prompt: str | list[str],
-        negative_prompt: Optional[str | list[str]] = None,
+        negative_prompt: str | list[str] | None = None,
         height: int = 1024,
         width: int = 1024,
         num_inference_steps: int = 50,
         guidance_scale: float = 7.5,
         num_images_per_prompt: int = 1,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
         output_type: str = "pil",
     ) -> list[Image.Image] | torch.Tensor:
         """Generate images from text prompts.
@@ -187,10 +186,10 @@ class DiffusionPipeline:
     def _encode_prompt(
         self,
         prompt: list[str],
-        negative_prompt: Optional[str | list[str]],
+        negative_prompt: str | list[str] | None,
         num_images_per_prompt: int,
         do_cfg: bool,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Encode text prompts."""
         # Encode positive prompt
         text_output = self.model.encode_text(prompt, device=self.device)
@@ -230,7 +229,7 @@ class DiffusionPipeline:
         batch_size: int,
         height: int,
         width: int,
-        generator: Optional[torch.Generator],
+        generator: torch.Generator | None,
     ) -> torch.Tensor:
         """Prepare initial random latents."""
         # Get latent dimensions
@@ -258,8 +257,8 @@ class DiffusionPipeline:
         batch_size: int,
         height: int,
         width: int,
-        pooled_embeds: Optional[torch.Tensor],
-    ) -> Optional[dict]:
+        pooled_embeds: torch.Tensor | None,
+    ) -> dict | None:
         """Prepare additional conditioning for SDXL."""
         if pooled_embeds is None:
             return None

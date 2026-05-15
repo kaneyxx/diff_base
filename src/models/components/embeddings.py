@@ -1,7 +1,6 @@
 """Embedding layers for diffusion models."""
 
 import math
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -71,8 +70,8 @@ class TimestepEmbedding(nn.Module):
         in_channels: int,
         time_embed_dim: int,
         act_fn: str = "silu",
-        out_dim: Optional[int] = None,
-        post_act_fn: Optional[str] = None,
+        out_dim: int | None = None,
+        post_act_fn: str | None = None,
         sample_proj_bias: bool = True,
     ):
         """Initialize timestep embedding projection.
@@ -179,8 +178,8 @@ class PositionalEmbedding(nn.Module):
 
     def forward(
         self,
-        position_ids: Optional[torch.Tensor] = None,
-        seq_length: Optional[int] = None,
+        position_ids: torch.Tensor | None = None,
+        seq_length: int | None = None,
     ) -> torch.Tensor:
         """Get positional embeddings.
 
@@ -242,7 +241,7 @@ class RotaryEmbedding(nn.Module):
         self,
         seq_len: int,
         device: torch.device,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get rotary embedding components.
 
         Args:
@@ -265,8 +264,8 @@ class RotaryEmbedding(nn.Module):
 
 def apply_rotary_emb(
     x: torch.Tensor,
-    cos_or_tuple: torch.Tensor | Tuple[torch.Tensor, torch.Tensor],
-    sin: Optional[torch.Tensor] = None,
+    cos_or_tuple: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
+    sin: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Apply rotary embeddings to input tensor.
 
@@ -394,7 +393,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(nn.Module):
         self,
         timestep: torch.Tensor,
         pooled_projection: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
+        guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -406,17 +405,18 @@ class CombinedTimestepGuidanceTextProjEmbeddings(nn.Module):
         Returns:
             Combined embeddings [B, embedding_dim].
         """
-        # Get timestep embedding
-        timestep_emb = get_timestep_embedding(timestep, dim=256)
+        # Sinusoidal embeddings are computed in fp32 for precision; cast to the
+        # embedder's parameter dtype so matmul matches the module weights.
+        param_dtype = next(self.timestep_embedder.parameters()).dtype
+
+        timestep_emb = get_timestep_embedding(timestep, dim=256).to(param_dtype)
         timestep_emb = self.timestep_embedder(timestep_emb)
 
-        # Add guidance embedding if provided
         if guidance is not None and self.guidance_embeds:
-            guidance_emb = get_timestep_embedding(guidance, dim=256)
+            guidance_emb = get_timestep_embedding(guidance, dim=256).to(param_dtype)
             timestep_emb = timestep_emb + self.guidance_embedder(guidance_emb)
 
-        # Add text embedding
-        text_emb = self.text_embedder(pooled_projection)
+        text_emb = self.text_embedder(pooled_projection.to(param_dtype))
         combined = timestep_emb + text_emb
 
         return combined

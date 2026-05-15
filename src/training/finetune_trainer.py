@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from .base_trainer import BaseTrainer
 from ..utils.logging import get_logger
+from .base_trainer import BaseTrainer
 
 logger = get_logger(__name__)
 

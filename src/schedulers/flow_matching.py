@@ -1,7 +1,5 @@
 """Flow matching scheduler for Flux models."""
 
-import math
-from typing import Optional, Tuple
 
 import torch
 from omegaconf import DictConfig
@@ -140,8 +138,8 @@ class FlowMatchingScheduler:
         model_output: torch.Tensor,
         timestep: torch.Tensor,
         sample: torch.Tensor,
-        generator: Optional[torch.Generator] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Perform one denoising step.
 
         Args:
@@ -196,6 +194,148 @@ class FlowMatchingScheduler:
         """
         timesteps = torch.linspace(1, 0, num_inference_steps + 1, device=device)
         return self._shift_schedule(timesteps)
+
+    # ------------------------------------------------------------------
+    # BFL-aligned methods (additive — existing methods above are unchanged)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mu(
+        image_seq_len: int,
+        base_shift: float = 0.5,
+        max_shift: float = 1.15,
+        x1: int = 256,
+        x2: int = 4096,
+    ) -> float:
+        """Linear interpolation of mu by image sequence length.
+
+        Matches BFL ``get_lin_function`` from ``src/flux/sampling.py``.
+
+        Args:
+            image_seq_len: Number of image tokens (H/patch * W/patch).
+            base_shift: Shift value at ``x1`` sequence length.
+            max_shift: Shift value at ``x2`` sequence length.
+            x1: Lower anchor sequence length (default 256 = 16×16 at patch=2).
+            x2: Upper anchor sequence length (default 4096 = 64×64 at patch=2).
+
+        Returns:
+            Scalar mu value for ``_time_shift``.
+        """
+        m = (max_shift - base_shift) / (x2 - x1)
+        b = base_shift - m * x1
+        return image_seq_len * m + b
+
+    @staticmethod
+    def _time_shift(mu: float, sigma: float, t: torch.Tensor) -> torch.Tensor:
+        """BFL time_shift: ``exp(mu) / (exp(mu) + (1/t - 1)**sigma)``.
+
+        Matches BFL ``time_shift`` from ``src/flux/sampling.py`` at commit 4a3a3eb.
+        At t=0, the limit is 0.0 and is set explicitly to avoid division by zero.
+
+        Velocity target convention: ``v = noise - x_0`` (rectified flow).
+
+        Args:
+            mu: Resolution-dependent shift parameter (from ``_mu``).
+            sigma: Exponent (always 1.0 in BFL training path).
+            t: Timesteps tensor in [0, 1].
+
+        Returns:
+            Shifted timesteps tensor, same shape as ``t``.
+        """
+        exp_mu = torch.exp(torch.tensor(mu, dtype=t.dtype, device=t.device))
+        # Avoid division by zero at t=0; limit is 0.0
+        safe_t = t.clamp(min=torch.finfo(t.dtype).tiny)
+        shifted = exp_mu / (exp_mu + (1.0 / safe_t - 1.0) ** sigma)
+        return torch.where(t == 0.0, torch.zeros_like(t), shifted)
+
+    def get_schedule(
+        self,
+        num_steps: int,
+        image_seq_len: int,
+        shift: bool = True,
+        base_shift: float = 0.5,
+        max_shift: float = 1.15,
+        device: torch.device | str = "cpu",
+    ) -> torch.Tensor:
+        """Inference-time timestep schedule, BFL-aligned.
+
+        Matches BFL ``get_schedule`` from ``src/flux/sampling.py`` at commit 4a3a3eb.
+
+        Args:
+            num_steps: Number of denoising steps.
+            image_seq_len: Number of image tokens (determines shift mu).
+            shift: If True, apply BFL resolution-aware time shift.
+            base_shift: Base shift value (BFL default 0.5).
+            max_shift: Max shift value (BFL default 1.15).
+            device: Target device.
+
+        Returns:
+            Timestep tensor of shape ``[num_steps + 1]`` in descending order.
+        """
+        timesteps = torch.linspace(1.0, 0.0, num_steps + 1, device=device)
+        if shift:
+            mu = self._mu(image_seq_len, base_shift, max_shift)
+            timesteps = self._time_shift(mu, 1.0, timesteps)
+        return timesteps
+
+    def training_sample(
+        self,
+        batch_size: int,
+        image_seq_len: int,
+        shift: bool = True,
+        device: torch.device | str = "cpu",
+        generator: torch.Generator | None = None,
+        dtype: torch.dtype = torch.float32,
+        base_shift: float = 0.5,
+        max_shift: float = 1.15,
+    ) -> torch.Tensor:
+        """Sample per-sample timesteps for training.
+
+        Draws ``t ~ Uniform(0, 1)`` then applies BFL time-shift if requested.
+
+        Args:
+            batch_size: Number of samples in the batch.
+            image_seq_len: Number of image tokens (for shift mu computation).
+            shift: If True, apply BFL resolution-aware time shift to sampled ``t``.
+            device: Target device.
+            generator: Optional RNG for reproducibility.
+            dtype: Floating-point dtype for the output tensor.
+            base_shift: Base shift value (BFL default 0.5).
+            max_shift: Max shift value (BFL default 1.15).
+
+        Returns:
+            Timestep tensor of shape ``[batch_size]`` in ``(0, 1]``.
+        """
+        t = torch.rand(batch_size, device=device, generator=generator, dtype=dtype)
+        if shift:
+            mu = self._mu(image_seq_len, base_shift, max_shift)
+            t = self._time_shift(mu, 1.0, t)
+        return t
+
+    def add_noise_to_target(
+        self,
+        x_0: torch.Tensor,
+        noise: torch.Tensor,
+        t: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build noisy latent and velocity target for flow-matching training.
+
+        Rectified flow formulation:
+        - ``x_t = (1 - t) * x_0 + t * noise``
+        - ``target_velocity = noise - x_0``
+
+        Args:
+            x_0: Clean latents of shape ``[B, ...]``.
+            noise: Noise tensor, same shape as ``x_0``.
+            t: Per-sample timesteps of shape ``[B]``.
+
+        Returns:
+            Tuple of ``(x_t, target_velocity)`` both of the same shape as ``x_0``.
+        """
+        t_b = t.view(-1, *([1] * (x_0.ndim - 1))).to(x_0.device, dtype=x_0.dtype)
+        x_t = (1.0 - t_b) * x_0 + t_b * noise
+        target_velocity = noise - x_0
+        return x_t, target_velocity
 
 
 class FluxFlowMatchingScheduler(FlowMatchingScheduler):
@@ -279,7 +419,7 @@ class FluxFlowMatchingScheduler(FlowMatchingScheduler):
         height: int,
         width: int,
         device: torch.device | str = "cpu",
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Prepare timesteps and sigmas for inference.
 
         Args:

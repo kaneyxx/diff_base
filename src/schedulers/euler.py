@@ -1,7 +1,5 @@
 """Euler discrete scheduler for diffusion inference."""
 
-import math
-from typing import Optional, Tuple
 
 import torch
 from omegaconf import DictConfig
@@ -99,9 +97,9 @@ class EulerDiscreteScheduler:
         model_output: torch.Tensor,
         timestep: int,
         sample: torch.Tensor,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
         return_dict: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Perform one Euler step.
 
         Args:
@@ -173,9 +171,9 @@ class EulerAncestralDiscreteScheduler(EulerDiscreteScheduler):
         model_output: torch.Tensor,
         timestep: int,
         sample: torch.Tensor,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
         return_dict: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Perform one ancestral Euler step.
 
         Args:

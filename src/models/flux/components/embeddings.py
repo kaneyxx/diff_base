@@ -14,14 +14,11 @@ Shared utilities (get_timestep_embedding, MLPEmbedder) live in
 src/models/components/embeddings.py to avoid duplication.
 """
 
-import math
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 
 # Re-export shared utilities for backward compatibility
-from ...components.embeddings import get_timestep_embedding, MLPEmbedder
 
 
 class FluxPosEmbed(nn.Module):
@@ -36,7 +33,7 @@ class FluxPosEmbed(nn.Module):
     def __init__(
         self,
         theta: float = 10000.0,
-        axes_dim: Tuple[int, ...] = (16, 56, 56),
+        axes_dim: tuple[int, ...] = (16, 56, 56),
     ):
         """Initialize FluxPosEmbed.
 
@@ -51,7 +48,7 @@ class FluxPosEmbed(nn.Module):
     def forward(
         self,
         ids: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute RoPE from position IDs.
 
         Matches HuggingFace: for each axis i, compute
@@ -73,7 +70,7 @@ def compute_axis_freqs(
     positions: torch.Tensor,
     dim: int,
     theta: float = 10000.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute rotary cos/sin for a single axis.
 
     Matches HuggingFace get_1d_rotary_pos_embed with repeat_interleave_real=True:
@@ -118,8 +115,8 @@ def compute_rope_from_position_ids(
     position_ids: torch.Tensor,
     dim: int,
     theta: float = 10000.0,
-    axes_dim: Optional[Tuple[int, ...]] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    axes_dim: tuple[int, ...] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute rotary embeddings from 3D position IDs.
 
     Matches HuggingFace FluxPosEmbed: processes each axis independently
@@ -160,4 +157,3 @@ def compute_rope_from_position_ids(
 
 
 # Re-export create_position_ids from conditioning for backward compatibility
-from ..v2.conditioning import create_position_ids as create_image_position_ids

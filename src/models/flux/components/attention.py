@@ -1,14 +1,13 @@
 """Flux-specific attention block implementations."""
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import AdaLayerNormZero, AdaLayerNormZeroSingle, RMSNorm
 from ...components.attention import JointAttention
 from ...components.embeddings import apply_rotary_emb
+from .layers import AdaLayerNormZero, AdaLayerNormZeroSingle, RMSNorm
 
 
 class FluxFeedForwardGELU(nn.Module):
@@ -108,9 +107,9 @@ class FluxJointTransformerBlock(nn.Module):
         img_hidden_states: torch.Tensor,
         txt_hidden_states: torch.Tensor,
         temb: torch.Tensor,
-        img_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        txt_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        img_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        txt_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -186,7 +185,7 @@ class FluxSingleAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -275,7 +274,7 @@ class FluxSingleTransformerBlock(nn.Module):
         self,
         hidden_states: torch.Tensor,
         temb: torch.Tensor,
-        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING
 from omegaconf import DictConfig
 
 if TYPE_CHECKING:
+    from ..base import BaseDiffusionModel
     from .v1 import Flux1Model
     from .v2 import Flux2Model
-    from ..base import BaseDiffusionModel
 
 # Registry of all supported Flux variants
 # Format: variant_name -> (version, variant_key)
@@ -27,10 +27,13 @@ FLUX_VARIANTS = {
     # FLUX.1 variants
     "flux1-dev": ("v1", "dev"),
     "flux1-schnell": ("v1", "schnell"),
+    "flux1-kontext": ("v1", "kontext"),
     "flux.1-dev": ("v1", "dev"),  # Alias
     "flux.1-schnell": ("v1", "schnell"),  # Alias
+    "flux.1-kontext": ("v1", "kontext"),  # Alias
     "dev": ("v1", "dev"),  # Short alias
     "schnell": ("v1", "schnell"),  # Short alias
+    "kontext": ("v1", "kontext"),  # Short alias
 
     # FLUX.2 variants
     "flux2-dev": ("v2", "dev"),
@@ -104,7 +107,8 @@ def create_flux_transformer(
     Args:
         version: "v1" or "v2".
         config: Transformer configuration (DictConfig or dict-like).
-        variant: Model variant ("dev", "schnell", "klein-4b", "klein-9b").
+        variant: Model variant. For v1: "dev", "schnell", "kontext".
+            For v2: "dev", "klein-4b", "klein-9b".
 
     Returns:
         FluxTransformerBase subclass instance.
@@ -135,8 +139,8 @@ def get_available_variants() -> dict[str, tuple[str, str]]:
 
 # Backwards compatibility - expose old names
 from .base_transformer import FluxTransformerBase
-from .v1 import Flux1Model, Flux1Transformer, Flux1VAE, Flux1TextEncoders
-from .v2 import Flux2Model, Flux2Transformer, Flux2VAE, Flux2TextEncoders
+from .v1 import Flux1Model, Flux1TextEncoders, Flux1Transformer, Flux1VAE
+from .v2 import Flux2Model, Flux2TextEncoders, Flux2Transformer, Flux2VAE
 
 # Legacy aliases for backwards compatibility
 FluxModel = Flux1Model

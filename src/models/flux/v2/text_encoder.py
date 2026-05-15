@@ -8,8 +8,8 @@ FLUX.2 variants use different text encoders than FLUX.1:
 These are LLM-based text encoders rather than CLIP/T5 combinations.
 """
 
+import os
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -21,6 +21,10 @@ class Flux2TextEncoders(nn.Module):
 
     Uses HuggingFace transformers for the actual encoder models.
     """
+
+    #: ``*-base`` variants are un-distilled weight aliases sharing the same
+    #: text-encoder architecture as the distilled forms.
+    VARIANT_ALIASES = {"klein-4b-base": "klein-4b", "klein-9b-base": "klein-9b"}
 
     # Variant-specific encoder configurations
     ENCODER_CONFIGS = {
@@ -55,8 +59,15 @@ class Flux2TextEncoders(nn.Module):
         self.config = config
         self.variant = variant
 
-        # Get variant defaults
-        encoder_cfg = self.ENCODER_CONFIGS.get(variant, self.ENCODER_CONFIGS["dev"])
+        # Resolve un-distilled `*-base` aliases to the underlying arch label.
+        resolved = self.VARIANT_ALIASES.get(variant, variant)
+        if resolved not in self.ENCODER_CONFIGS:
+            raise ValueError(
+                f"Unknown FLUX.2 text-encoder variant '{variant}'. "
+                f"Known: {sorted(self.ENCODER_CONFIGS)} "
+                f"(+ aliases {sorted(self.VARIANT_ALIASES)})."
+            )
+        encoder_cfg = self.ENCODER_CONFIGS[resolved]
 
         self.model_id = config.get("model_id", encoder_cfg["model_id"])
         self.encoder_type = config.get("type", encoder_cfg["encoder_type"])
@@ -68,13 +79,12 @@ class Flux2TextEncoders(nn.Module):
         self.tokenizer = None
         self._loaded = False
 
-    def load_pretrained(self, pretrained_path: Optional[str | Path] = None) -> None:
+    def load_pretrained(self, pretrained_path: str | Path | None = None) -> None:
         """Load pretrained text encoder.
 
         Args:
             pretrained_path: Path to model directory. If None, loads from HuggingFace.
         """
-        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         model_path = pretrained_path if pretrained_path else self.model_id
 
@@ -87,6 +97,20 @@ class Flux2TextEncoders(nn.Module):
 
         self._loaded = True
 
+    @staticmethod
+    def _is_offline_mode() -> bool:
+        """Return True when HF_HUB_OFFLINE env var is set to '1' or 'true'."""
+        val = os.environ.get("HF_HUB_OFFLINE", "").strip().lower()
+        return val in ("1", "true")
+
+    @staticmethod
+    def _hf_cache_path(model_id: str) -> str:
+        """Build the expected HF Hub snapshot cache path for a model_id."""
+        hf_home = os.environ.get("HF_HOME", os.path.join(os.path.expanduser("~"), ".cache", "huggingface"))
+        # model_id "org/name" → "models--org--name"
+        dir_name = "models--" + model_id.replace("/", "--")
+        return os.path.join(hf_home, "hub", dir_name, "snapshots")
+
     def _load_mistral_encoder(self, model_path: str | Path) -> None:
         """Load Mistral encoder.
 
@@ -95,18 +119,41 @@ class Flux2TextEncoders(nn.Module):
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-        )
+        offline = self._is_offline_mode()
+        extra_kwargs: dict = {"local_files_only": True} if offline else {}
 
-        # Load as encoder-only (we only need hidden states, not generation)
-        self.encoder = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-            output_hidden_states=True,
-        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                **extra_kwargs,
+            )
+        except (OSError, FileNotFoundError) as e:
+            cache = self._hf_cache_path(str(model_path))
+            raise OSError(
+                f"Failed to load tokenizer for model '{model_path}'. "
+                f"Probed HF cache path: {cache}. "
+                "To fix: either unset HF_HUB_OFFLINE (to allow a download) "
+                "or run: huggingface-cli download " + str(model_path)
+            ) from e
+
+        try:
+            # Load as encoder-only (we only need hidden states, not generation)
+            self.encoder = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                output_hidden_states=True,
+                **extra_kwargs,
+            )
+        except (OSError, FileNotFoundError) as e:
+            cache = self._hf_cache_path(str(model_path))
+            raise OSError(
+                f"Failed to load model weights for '{model_path}'. "
+                f"Probed HF cache path: {cache}. "
+                "To fix: either unset HF_HUB_OFFLINE (to allow a download) "
+                "or run: huggingface-cli download " + str(model_path)
+            ) from e
 
         # Set pad token if not set
         if self.tokenizer.pad_token is None:
@@ -120,17 +167,40 @@ class Flux2TextEncoders(nn.Module):
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-        )
+        offline = self._is_offline_mode()
+        extra_kwargs: dict = {"local_files_only": True} if offline else {}
 
-        self.encoder = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-            output_hidden_states=True,
-        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                **extra_kwargs,
+            )
+        except (OSError, FileNotFoundError) as e:
+            cache = self._hf_cache_path(str(model_path))
+            raise OSError(
+                f"Failed to load tokenizer for model '{model_path}'. "
+                f"Probed HF cache path: {cache}. "
+                "To fix: either unset HF_HUB_OFFLINE (to allow a download) "
+                "or run: huggingface-cli download " + str(model_path)
+            ) from e
+
+        try:
+            self.encoder = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                output_hidden_states=True,
+                **extra_kwargs,
+            )
+        except (OSError, FileNotFoundError) as e:
+            cache = self._hf_cache_path(str(model_path))
+            raise OSError(
+                f"Failed to load model weights for '{model_path}'. "
+                f"Probed HF cache path: {cache}. "
+                "To fix: either unset HF_HUB_OFFLINE (to allow a download) "
+                "or run: huggingface-cli download " + str(model_path)
+            ) from e
 
         # Set pad token if not set
         if self.tokenizer.pad_token is None:
@@ -140,7 +210,7 @@ class Flux2TextEncoders(nn.Module):
         self,
         prompt: str | list[str],
         device: torch.device | str = "cuda",
-        max_length: Optional[int] = None,
+        max_length: int | None = None,
     ) -> dict[str, torch.Tensor]:
         """Encode text prompts.
 
@@ -200,7 +270,7 @@ class Flux2TextEncoders(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with pre-tokenized inputs.
 
@@ -233,7 +303,7 @@ class Flux2TextEncoders(nn.Module):
 
         return hidden_states, pooled_embeds
 
-    def to(self, device: torch.device | str, dtype: Optional[torch.dtype] = None):
+    def to(self, device: torch.device | str, dtype: torch.dtype | None = None):
         """Move encoder to device."""
         if self.encoder is not None:
             self.encoder = self.encoder.to(device, dtype=dtype)

@@ -2,10 +2,10 @@
 
 import hashlib
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import torch
-from safetensors.torch import save_file, load_file
+from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ class LatentCache:
         """
         return self.cache_dir / f"{self.model_hash}_{idx:08d}.safetensors"
 
-    def get(self, idx: int) -> Optional[dict[str, torch.Tensor]]:
+    def get(self, idx: int) -> dict[str, torch.Tensor] | None:
         """Load cached tensors if available.
 
         Args:
@@ -243,7 +243,7 @@ class EmbeddingCache:
         """Get cache key for text."""
         return hashlib.md5(text.encode()).hexdigest()
 
-    def get(self, text: str) -> Optional[dict[str, torch.Tensor]]:
+    def get(self, text: str) -> dict[str, torch.Tensor] | None:
         """Get cached embedding for text."""
         key = self._get_key(text)
 

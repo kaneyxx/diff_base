@@ -1,7 +1,6 @@
 """SDXL Text Encoders (CLIP-L and CLIP-G)."""
 
 from pathlib import Path
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -69,7 +68,7 @@ class SDXLTextEncoders(nn.Module):
         device: torch.device | str = "cuda",
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
-        negative_prompt: Optional[str | list[str]] = None,
+        negative_prompt: str | list[str] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Encode text prompts.
 
@@ -160,7 +159,7 @@ class SDXLTextEncoders(nn.Module):
         self,
         prompt: list[str],
         device: torch.device | str,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode a single prompt without CFG handling."""
         # Tokenize
         text_inputs_1 = self.tokenizer(
@@ -202,7 +201,7 @@ class SDXLTextEncoders(nn.Module):
         self,
         input_ids_1: torch.Tensor,
         input_ids_2: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with pre-tokenized inputs.
 
         Args:
@@ -233,7 +232,7 @@ class SDXLTextEncoders(nn.Module):
 
         return prompt_embeds, pooled
 
-    def to(self, device: torch.device | str, dtype: Optional[torch.dtype] = None):
+    def to(self, device: torch.device | str, dtype: torch.dtype | None = None):
         """Move encoders to device."""
         if self.text_encoder is not None:
             self.text_encoder = self.text_encoder.to(device, dtype=dtype)

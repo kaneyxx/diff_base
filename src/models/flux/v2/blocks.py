@@ -12,14 +12,13 @@ Key differences from FLUX.1 blocks:
 - norm2/norm2_context present (unlike FLUX.1 HF which skips them)
 """
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..components.layers import RMSNorm
 from ...components.embeddings import apply_rotary_emb
+from ..components.layers import RMSNorm
 
 
 class Flux2SwiGLU(nn.Module):
@@ -106,9 +105,9 @@ class Flux2Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        text_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        text_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with joint attention.
 
         Args:
@@ -235,7 +234,7 @@ class Flux2ParallelSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -328,11 +327,11 @@ class Flux2TransformerBlock(nn.Module):
         self,
         img_hidden_states: torch.Tensor,
         txt_hidden_states: torch.Tensor,
-        img_mod: Tuple,
-        txt_mod: Tuple,
-        img_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        txt_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        img_mod: tuple,
+        txt_mod: tuple,
+        img_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        txt_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -429,8 +428,8 @@ class Flux2SingleTransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        mod: Tuple,
-        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        mod: tuple,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

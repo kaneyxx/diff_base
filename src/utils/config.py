@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 
 def load_config(config_path: str | Path) -> DictConfig:

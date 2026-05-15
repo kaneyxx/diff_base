@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from ..sdxl.vae import Encoder, Decoder, DiagonalGaussianDistribution
+from ..sdxl.vae import Decoder, DiagonalGaussianDistribution, Encoder
 
 
 class FluxVAE(nn.Module):

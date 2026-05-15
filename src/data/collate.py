@@ -1,6 +1,7 @@
 """Batch collation functions for diffusion training."""
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from omegaconf import DictConfig

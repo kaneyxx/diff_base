@@ -1,12 +1,13 @@
 """ControlNet trainer for conditional image generation."""
 
+from copy import deepcopy
+
 import torch
 import torch.nn as nn
-from copy import deepcopy
 from omegaconf import DictConfig
 
-from .base_trainer import BaseTrainer
 from ..utils.logging import get_logger
+from .base_trainer import BaseTrainer
 
 logger = get_logger(__name__)
 
@@ -354,6 +355,7 @@ class ControlNetTrainer(BaseTrainer):
     def _save_checkpoint(self, final: bool = False) -> None:
         """Save ControlNet checkpoint."""
         from pathlib import Path
+
         from safetensors.torch import save_file
 
         output_dir = Path(self.config.experiment.output_dir)

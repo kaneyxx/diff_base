@@ -1,11 +1,10 @@
 """Image transforms for diffusion training."""
 
-from typing import Tuple
 
 import torch
 import torchvision.transforms as T
-from PIL import Image
 from omegaconf import DictConfig
+from PIL import Image
 
 
 def create_transforms(resolution: int, config: DictConfig) -> T.Compose:
@@ -53,7 +52,7 @@ def create_transforms(resolution: int, config: DictConfig) -> T.Compose:
 
 
 def create_bucket_transforms(
-    target_size: Tuple[int, int],
+    target_size: tuple[int, int],
     config: DictConfig,
 ) -> T.Compose:
     """Create transforms for a specific bucket size.
@@ -126,9 +125,9 @@ class RandomCrop:
 
     def __init__(
         self,
-        size: int | Tuple[int, int],
-        scale: Tuple[float, float] = (0.8, 1.0),
-        ratio: Tuple[float, float] = (0.75, 1.33),
+        size: int | tuple[int, int],
+        scale: tuple[float, float] = (0.8, 1.0),
+        ratio: tuple[float, float] = (0.75, 1.33),
     ):
         """Initialize random crop.
 
@@ -143,8 +142,8 @@ class RandomCrop:
 
     def __call__(self, img: Image.Image) -> Image.Image:
         """Apply random crop."""
-        import random
         import math
+        import random
 
         width, height = img.size
         area = width * height

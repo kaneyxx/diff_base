@@ -6,13 +6,12 @@ SD3 uses MM-DiT (Multimodal Diffusion Transformer) architecture with:
 - Self-attention with modulation from conditioning
 """
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import RMSNorm, AdaLayerNormZero, FeedForward, modulate
+from .layers import AdaLayerNormZero, FeedForward, RMSNorm, modulate
 
 
 class QKNorm(nn.Module):
@@ -37,7 +36,7 @@ class QKNorm(nn.Module):
         self,
         query: torch.Tensor,
         key: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Apply QK normalization.
 
         Args:
@@ -67,7 +66,7 @@ class Attention(nn.Module):
         dropout: float = 0.0,
         bias: bool = False,
         qk_norm: bool = True,
-        context_dim: Optional[int] = None,
+        context_dim: int | None = None,
         context_pre_only: bool = False,
     ):
         """Initialize Attention.
@@ -111,8 +110,8 @@ class Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        context: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        context: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply attention.
 
@@ -239,7 +238,7 @@ class JointTransformerBlock(nn.Module):
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         temb: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass of joint transformer block.
 
         Args:
@@ -288,7 +287,7 @@ class JointTransformerBlock(nn.Module):
         self,
         img_hidden: torch.Tensor,
         txt_hidden: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute joint attention between image and text.
 
         Args:

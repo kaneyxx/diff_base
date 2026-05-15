@@ -1,12 +1,15 @@
 """LoRA trainer for efficient fine-tuning."""
 
+from pathlib import Path
+from typing import Any
+
 import torch
 import torch.nn as nn
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
-from .base_trainer import BaseTrainer
-from .methods.lora import inject_lora_layers, get_lora_parameters, save_lora_weights
 from ..utils.logging import get_logger
+from .base_trainer import BaseTrainer
+from .methods.lora import get_lora_parameters, inject_lora_layers, load_lora_weights, save_lora_weights
 
 logger = get_logger(__name__)
 
@@ -217,11 +220,20 @@ class LoRATrainer(BaseTrainer):
     def _save_checkpoint(self, final: bool = False) -> None:
         """Save LoRA checkpoint.
 
+        By default (training.save_full_model=false), saves only the slim
+        LoRA-only checkpoint:
+          - lora/adapter_model.safetensors  (LoRA params)
+          - lora/adapter_config.json        (LoRA hyper-params)
+          - training_state.pt               (step, epoch, optimizer, scheduler)
+          - config.yaml                     (resolved experiment config)
+
+        When training.save_full_model=true (explicit opt-in), the legacy
+        behavior is preserved: super()._save_checkpoint() writes model.safetensors
+        containing the full model state (12B+ parameters).
+
         Args:
             final: Whether this is the final checkpoint.
         """
-        from pathlib import Path
-
         output_dir = Path(self.config.experiment.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -230,11 +242,82 @@ class LoRATrainer(BaseTrainer):
         else:
             checkpoint_dir = output_dir / f"checkpoint-{self.global_step}"
 
-        # Save full checkpoint (including training state)
-        super()._save_checkpoint(final)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Also save just the LoRA weights for easy loading
+        # Check whether the caller opted into the legacy full-model save.
+        save_full_model = self.config.training.get("save_full_model", False)
+
+        if save_full_model:
+            # Legacy path: writes model.safetensors (full model state).
+            super()._save_checkpoint(final)
+        else:
+            # Slim path: training state + config only (no full model weights).
+            training_state: dict[str, Any] = {
+                "step": self.global_step,
+                "epoch": self.current_epoch,
+                "optimizer": self.optimizer.state_dict(),
+            }
+            if self.lr_scheduler is not None:
+                training_state["scheduler"] = self.lr_scheduler.state_dict()
+
+            torch.save(training_state, checkpoint_dir / "training_state.pt")
+            OmegaConf.save(self.config, checkpoint_dir / "config.yaml")
+
+        # Always save LoRA adapter weights (the whole point of LoRA training).
+        # Unwrap the DDP wrapper when Accelerator is active so that the
+        # state_dict keys do not carry the "module." prefix.
         lora_dir = checkpoint_dir / "lora"
-        save_lora_weights(self.model, lora_dir, self.config)
+        save_lora_weights(self._unwrap_model(), lora_dir, self.config)
 
-        logger.info(f"LoRA weights saved to {lora_dir}")
+        logger.info(f"LoRA checkpoint saved to {checkpoint_dir} (save_full_model={save_full_model})")
+
+    def load_checkpoint(self, checkpoint_path: str | Path) -> None:
+        """Load LoRA checkpoint.
+
+        Handles both the slim format (lora/ subdir with adapter_model.safetensors)
+        and the legacy full-model format (model.safetensors at checkpoint root).
+
+        Args:
+            checkpoint_path: Path to checkpoint directory.
+        """
+        checkpoint_dir = Path(checkpoint_path)
+
+        # Restore training state (step, epoch, optimizer, scheduler).
+        training_state_path = checkpoint_dir / "training_state.pt"
+        if training_state_path.exists():
+            training_state = torch.load(
+                training_state_path, map_location=self.device
+            )
+            self.global_step = training_state.get("step", 0)
+            self.current_epoch = training_state.get("epoch", 0)
+
+            if self.optimizer is not None and "optimizer" in training_state:
+                self.optimizer.load_state_dict(training_state["optimizer"])
+                logger.info("Loaded optimizer state from training_state.pt")
+
+            if self.lr_scheduler is not None and "scheduler" in training_state:
+                self.lr_scheduler.load_state_dict(training_state["scheduler"])
+                logger.info("Loaded scheduler state from training_state.pt")
+
+        # Load LoRA weights from the lora/ subdir (slim format).
+        lora_dir = checkpoint_dir / "lora"
+        if lora_dir.exists():
+            load_lora_weights(self.model, lora_dir, device=self.device)
+            logger.info(f"Loaded LoRA weights from {lora_dir}")
+        elif (checkpoint_dir / "model.safetensors").exists():
+            # Fall back to full-model checkpoint (legacy format).
+            from ..utils.checkpoint import load_checkpoint as _load_ckpt
+            _load_ckpt(
+                path=checkpoint_dir,
+                model=self.model,
+                optimizer=self.optimizer,
+                scheduler=self.lr_scheduler,
+                device=self.device,
+            )
+            logger.info(f"Loaded full-model checkpoint from {checkpoint_dir}")
+        else:
+            raise FileNotFoundError(
+                f"No LoRA weights or model.safetensors found in {checkpoint_dir}"
+            )
+
+        logger.info(f"Resumed from step {self.global_step}, epoch {self.current_epoch}")

@@ -33,25 +33,23 @@ Key naming mappings:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple, Union
+from collections.abc import Callable
+from typing import Literal
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from ..base_transformer import FluxTransformerBase
-from ..components.attention import FluxJointTransformerBlock, FluxSingleTransformerBlock
-from ..components.embeddings import (
-    FluxPosEmbed,
-    get_timestep_embedding,
-    compute_rope_from_position_ids,
-)
-from ..components.layers import AdaLayerNormContinuous
 from ...components.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
 )
+from ..base_transformer import FluxTransformerBase
+from ..components.attention import FluxJointTransformerBlock, FluxSingleTransformerBlock
+from ..components.embeddings import (
+    compute_rope_from_position_ids,
+)
+from ..components.layers import AdaLayerNormContinuous
 from .conditioning import create_position_ids
-
 
 # Default FLUX.1 RoPE axes dimensions matching HuggingFace
 FLUX1_AXES_DIM = (16, 56, 56)
@@ -85,6 +83,14 @@ class Flux1Transformer(FluxTransformerBase):
             "in_channels": 64,
             "guidance_embeds": False,
         },
+        "kontext": {
+            "num_layers": 19,
+            "num_single_layers": 38,
+            "hidden_size": 3072,
+            "num_attention_heads": 24,
+            "in_channels": 64,
+            "guidance_embeds": True,
+        },
     }
 
     def __init__(self, config: DictConfig, variant: str = "dev"):
@@ -92,14 +98,20 @@ class Flux1Transformer(FluxTransformerBase):
 
         Args:
             config: Transformer configuration.
-            variant: Model variant ("dev" or "schnell").
+            variant: Model variant ("dev", "schnell", or "kontext").
         """
         super().__init__()
         self.config = config
         self.variant = variant
 
+        if variant not in self.VARIANT_CONFIGS:
+            raise ValueError(
+                f"Unknown FLUX.1 variant: {variant!r}. "
+                f"Supported: {sorted(self.VARIANT_CONFIGS)}"
+            )
+
         # Get variant defaults, allow config overrides
-        variant_cfg = self.VARIANT_CONFIGS.get(variant, self.VARIANT_CONFIGS["dev"])
+        variant_cfg = self.VARIANT_CONFIGS[variant]
 
         hidden_size = config.get("hidden_size", variant_cfg["hidden_size"])
         num_heads = config.get("num_attention_heads", variant_cfg["num_attention_heads"])
@@ -156,19 +168,50 @@ class Flux1Transformer(FluxTransformerBase):
 
         self._gradient_checkpointing = False
 
+        # nn.ModuleDict so downstream conditioning modules participate in
+        # state_dict and .to(device) without any extra bookkeeping.
+        self.conditioning_modules: nn.ModuleDict = nn.ModuleDict()
+
+    def register_conditioning_module(self, name: str, module: nn.Module) -> None:
+        """Register a downstream conditioning module on this transformer.
+
+        Stored in ``self.conditioning_modules`` (an ``nn.ModuleDict``) so the
+        module participates in ``state_dict()`` save/load and ``.to(device)``
+        calls automatically.
+
+        Args:
+            name: Unique key for the module (must be a valid Python identifier).
+            module: The ``nn.Module`` to register.
+
+        Raises:
+            TypeError: If *module* is not an ``nn.Module``.
+            ValueError: If *name* is already registered.
+        """
+        if not isinstance(module, nn.Module):
+            raise TypeError(
+                f"register_conditioning_module expects an nn.Module, got {type(module)}"
+            )
+        if name in self.conditioning_modules:
+            raise ValueError(
+                f"A conditioning module named '{name}' is already registered. "
+                "Use a unique name or remove the existing one first."
+            )
+        self.conditioning_modules[name] = module
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         timestep: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
-        img_ids: Optional[torch.Tensor] = None,
-        txt_ids: Optional[torch.Tensor] = None,
-        img_cond_seq: Optional[torch.Tensor] = None,
-        img_cond_seq_ids: Optional[torch.Tensor] = None,
-        return_hidden_states_at: Optional[List[int]] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[int, torch.Tensor]]]:
+        guidance: torch.Tensor | None = None,
+        img_ids: torch.Tensor | None = None,
+        txt_ids: torch.Tensor | None = None,
+        img_cond_seq: torch.Tensor | None = None,
+        img_cond_seq_ids: torch.Tensor | None = None,
+        return_hidden_states_at: list[int] | None = None,
+        block_hooks: dict[Literal["joint", "single"], list[Callable]] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[int, torch.Tensor]]:
         """Forward pass matching HuggingFace FluxTransformer2DModel.
 
         RoPE flow (matches HuggingFace exactly):
@@ -195,18 +238,34 @@ class Flux1Transformer(FluxTransformerBase):
             img_cond_seq: Kontext conditioning sequence [B, ref_seq, in_channels].
             img_cond_seq_ids: Position IDs for Kontext ref [B, ref_seq, 3].
             return_hidden_states_at: Optional list of joint block indices to capture.
+            block_hooks: Optional dict with keys ``"joint"`` and/or ``"single"``,
+                each mapping to a list of callables invoked after the corresponding
+                block type. Each callable receives
+                ``(block_idx, hidden_states, txt_hidden_or_None, temb)`` and must
+                return a ``torch.Tensor`` delta that is **added** to
+                ``hidden_states``. Defaults to ``None`` (no hooks, backward compat).
+
+                **Experimental** — the hook signature may change between versions.
 
         Returns:
-            Predicted output [B, img_seq, in_channels] (includes ref tokens if Kontext).
-            If return_hidden_states_at is set, returns (output, captured_states).
+            Predicted noise [B, target_seq, in_channels] — target tokens only.
+            Reference tokens (Kontext) are an internal implementation detail and
+            are NOT included in the output.
+            If return_hidden_states_at is set, returns (output, captured_states)
+            where each captured state is also target-tokens-only.
         """
-        B = hidden_states.shape[0]
+        B = hidden_states.shape[0]  # noqa: N806
         device = hidden_states.device
         dtype = hidden_states.dtype
 
         # === Timestep scaling (HuggingFace does this inside the model) ===
         timestep = timestep.to(dtype) * 1000
         if guidance is not None:
+            if not self.guidance_embeds:
+                raise ValueError(
+                    f"FLUX.1 variant '{self.variant}' has guidance_embeds=False "
+                    "(schnell). Do not pass guidance to schnell models."
+                )
             guidance = guidance.to(dtype) * 1000
 
         # === Embed inputs ===
@@ -222,6 +281,10 @@ class Flux1Transformer(FluxTransformerBase):
                 batch_size=B, height=h, width=w,
                 device=device, dtype=dtype, time_offset=0.0,
             )
+
+        # Capture target sequence length before Kontext concatenation so we
+        # can slice reference tokens off the output later (AC1).
+        target_seq_len = hidden_states.shape[1]
 
         # === Handle Kontext mode (sequence-wise concatenation) ===
         if img_cond_seq is not None:
@@ -266,7 +329,6 @@ class Flux1Transformer(FluxTransformerBase):
 
         # === Split rotary emb for joint blocks ===
         # Joint blocks process txt and img separately, so split the unified emb
-        img_seq_len = hidden_states.shape[1]
         txt_rotary_emb = (
             image_rotary_emb[0][:, :txt_seq_len],
             image_rotary_emb[1][:, :txt_seq_len],
@@ -277,6 +339,7 @@ class Flux1Transformer(FluxTransformerBase):
         )
 
         # === Joint attention blocks ===
+        joint_hooks = block_hooks.get("joint", []) if block_hooks else []
         txt_hidden = encoder_hidden_states
         captured_hidden_states = {} if return_hidden_states_at is not None else None
         for block_idx, block in enumerate(self.transformer_blocks):
@@ -287,18 +350,38 @@ class Flux1Transformer(FluxTransformerBase):
                 img_rotary_emb,
                 txt_rotary_emb,
             )
+            for hook in joint_hooks:
+                delta = hook(block_idx, hidden_states, txt_hidden, temb)
+                if not isinstance(delta, torch.Tensor):
+                    raise TypeError(
+                        f"block_hooks['joint'] hook at block {block_idx} must return "
+                        f"a torch.Tensor delta, got {type(delta)}"
+                    )
+                hidden_states = hidden_states + delta
             if captured_hidden_states is not None and block_idx in return_hidden_states_at:
-                captured_hidden_states[block_idx] = hidden_states
+                # Capture target tokens only (REPA loss should not use reference tokens)
+                captured_hidden_states[block_idx] = hidden_states[:, :target_seq_len]
 
         # === Concatenate for single stream ===
         hidden_states = torch.cat([txt_hidden, hidden_states], dim=1)
 
         # === Single stream blocks (use full unified rotary emb) ===
-        for block in self.single_transformer_blocks:
+        single_hooks = block_hooks.get("single", []) if block_hooks else []
+        for block_idx, block in enumerate(self.single_transformer_blocks):
             hidden_states = block(hidden_states, temb, image_rotary_emb)
+            for hook in single_hooks:
+                delta = hook(block_idx, hidden_states, None, temb)
+                if not isinstance(delta, torch.Tensor):
+                    raise TypeError(
+                        f"block_hooks['single'] hook at block {block_idx} must return "
+                        f"a torch.Tensor delta, got {type(delta)}"
+                    )
+                hidden_states = hidden_states + delta
 
-        # === Extract image tokens (remove text prefix) ===
+        # === Extract image tokens (remove text prefix, then remove reference tokens) ===
         hidden_states = hidden_states[:, txt_seq_len:]
+        # Slice to target tokens only; in non-Kontext mode target_seq_len == full img seq.
+        hidden_states = hidden_states[:, :target_seq_len]
 
         # === Project output ===
         hidden_states = self.norm_out(hidden_states, temb)

@@ -1,6 +1,5 @@
 """Shared layer implementations for Flux models."""
 
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -28,7 +27,7 @@ class AdaLayerNormZero(nn.Module):
         self,
         x: torch.Tensor,
         emb: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -67,7 +66,7 @@ class AdaLayerNormZeroSingle(nn.Module):
         self,
         x: torch.Tensor,
         emb: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -157,7 +156,7 @@ class QKNorm(nn.Module):
         self,
         q: torch.Tensor,
         k: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Normalize queries and keys.
 
         Args:
@@ -215,7 +214,7 @@ class Flux2Modulation(nn.Module):
         self.linear = nn.Linear(dim, dim * 3 * self.mod_param_sets, bias=bias)
         self.act_fn = nn.SiLU()
 
-    def forward(self, temb: torch.Tensor) -> Tuple:
+    def forward(self, temb: torch.Tensor) -> tuple:
         """Compute modulation parameters.
 
         Args:

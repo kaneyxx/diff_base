@@ -2,15 +2,14 @@
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import torch
-from torch.utils.data import Dataset
-from PIL import Image
 from omegaconf import DictConfig
+from PIL import Image
+from torch.utils.data import Dataset
 
-from .transforms import create_transforms, create_bucket_transforms
 from .cache import LatentCache
+from .transforms import create_bucket_transforms, create_transforms
 
 
 class DiffusionDataset(Dataset):
@@ -25,7 +24,7 @@ class DiffusionDataset(Dataset):
         data_path: str | Path,
         resolution: int,
         config: DictConfig,
-        cache: Optional[LatentCache] = None,
+        cache: LatentCache | None = None,
     ):
         """Initialize dataset.
 
@@ -154,7 +153,7 @@ class BucketDataset(Dataset):
         self.samples = self._load_samples()
 
         # Build buckets
-        from .bucket import compute_bucket_sizes, assign_to_buckets
+        from .bucket import assign_to_buckets, compute_bucket_sizes
 
         self.bucket_sizes = compute_bucket_sizes(
             base_resolution,

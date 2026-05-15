@@ -1,7 +1,6 @@
 """DDPM (Denoising Diffusion Probabilistic Models) scheduler."""
 
 import math
-from typing import Optional, Tuple
 
 import torch
 from omegaconf import DictConfig
@@ -150,8 +149,8 @@ class DDPMScheduler:
         model_output: torch.Tensor,
         timestep: int,
         sample: torch.Tensor,
-        generator: Optional[torch.Generator] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Perform one denoising step.
 
         Args:

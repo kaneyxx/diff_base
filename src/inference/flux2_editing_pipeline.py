@@ -12,26 +12,23 @@ Key Implementation Notes:
 """
 
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn as nn
-from PIL import Image
 from omegaconf import DictConfig
+from PIL import Image
 from tqdm import tqdm
 
+from ..data.transforms import pil_to_tensor, tensor_to_pil
 from ..models.flux.v2 import Flux2Model
 from ..models.flux.v2.conditioning import (
     rearrange_latent_to_sequence,
     rearrange_sequence_to_latent,
-    prepare_kontext_conditioning,
-    prepare_fill_conditioning,
 )
 from ..schedulers import create_scheduler
 from ..utils.config import load_config
 from ..utils.logging import get_logger
-from ..data.transforms import tensor_to_pil, pil_to_tensor
 
 logger = get_logger(__name__)
 
@@ -68,7 +65,7 @@ class Flux2EditingPipeline:
         model: Flux2Model,
         scheduler,
         config: DictConfig,
-        device: Union[torch.device, str] = "cuda",
+        device: torch.device | str = "cuda",
         dtype: torch.dtype = torch.float16,
     ):
         """Initialize editing pipeline.
@@ -94,7 +91,7 @@ class Flux2EditingPipeline:
     @classmethod
     def from_pretrained(
         cls,
-        checkpoint_path: Union[str, Path],
+        checkpoint_path: str | Path,
         variant: str = "dev",
         device: str = "cuda",
         dtype: str = "float16",
@@ -159,19 +156,19 @@ class Flux2EditingPipeline:
     @torch.no_grad()
     def __call__(
         self,
-        prompt: Union[str, List[str]],
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        reference_image: Optional[Union[Image.Image, torch.Tensor]] = None,
-        mask: Optional[Union[Image.Image, torch.Tensor]] = None,
+        prompt: str | list[str],
+        negative_prompt: str | list[str] | None = None,
+        reference_image: Image.Image | torch.Tensor | None = None,
+        mask: Image.Image | torch.Tensor | None = None,
         mode: Literal["generate", "kontext", "fill"] = "generate",
         height: int = 1024,
         width: int = 1024,
         num_inference_steps: int = 50,
         guidance_scale: float = 3.5,
         num_images_per_prompt: int = 1,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
         output_type: str = "pil",
-    ) -> Union[List[Image.Image], torch.Tensor]:
+    ) -> list[Image.Image] | torch.Tensor:
         """Generate or edit images.
 
         Args:
@@ -251,7 +248,7 @@ class Flux2EditingPipeline:
 
     def _prepare_image(
         self,
-        image: Union[Image.Image, torch.Tensor],
+        image: Image.Image | torch.Tensor,
         height: int,
         width: int,
     ) -> torch.Tensor:
@@ -283,7 +280,7 @@ class Flux2EditingPipeline:
 
     def _prepare_mask(
         self,
-        mask: Union[Image.Image, torch.Tensor],
+        mask: Image.Image | torch.Tensor,
         height: int,
         width: int,
     ) -> torch.Tensor:
@@ -322,10 +319,10 @@ class Flux2EditingPipeline:
     def _prepare_conditioning(
         self,
         mode: str,
-        reference_tensor: Optional[torch.Tensor],
-        mask_tensor: Optional[torch.Tensor],
+        reference_tensor: torch.Tensor | None,
+        mask_tensor: torch.Tensor | None,
         batch_size: int,
-    ) -> Dict[str, Optional[torch.Tensor]]:
+    ) -> dict[str, torch.Tensor | None]:
         """Prepare conditioning tensors based on mode.
 
         Args:
@@ -378,11 +375,11 @@ class Flux2EditingPipeline:
 
     def _encode_prompt(
         self,
-        prompt: List[str],
-        negative_prompt: Optional[Union[str, List[str]]],
+        prompt: list[str],
+        negative_prompt: str | list[str] | None,
         num_images_per_prompt: int,
         do_cfg: bool,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Encode text prompts.
 
         Args:
@@ -432,7 +429,7 @@ class Flux2EditingPipeline:
         batch_size: int,
         height: int,
         width: int,
-        generator: Optional[torch.Generator],
+        generator: torch.Generator | None,
     ) -> torch.Tensor:
         """Prepare initial random latents.
 
@@ -468,11 +465,11 @@ class Flux2EditingPipeline:
         self,
         latents: torch.Tensor,
         prompt_embeds: torch.Tensor,
-        pooled_embeds: Optional[torch.Tensor],
+        pooled_embeds: torch.Tensor | None,
         guidance_scale: float,
         num_inference_steps: int,
-        conditioning: Dict[str, Optional[torch.Tensor]],
-        generator: Optional[torch.Generator] = None,
+        conditioning: dict[str, torch.Tensor | None],
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Run denoising loop with conditioning.
 
@@ -583,7 +580,7 @@ class Flux2EditingPipeline:
 
 
 def create_flux2_editing_pipeline(
-    checkpoint_path: Union[str, Path],
+    checkpoint_path: str | Path,
     variant: str = "dev",
     device: str = "cuda",
     dtype: str = "float16",

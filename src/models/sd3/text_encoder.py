@@ -12,7 +12,6 @@ The encoders work together:
 """
 
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -69,7 +68,6 @@ class SD3TextEncoders(nn.Module):
             pretrained_path: Path to SD3 model directory or HuggingFace repo.
         """
         from transformers import (
-            CLIPTextModel,
             CLIPTextModelWithProjection,
             CLIPTokenizer,
             T5EncoderModel,
@@ -133,7 +131,7 @@ class SD3TextEncoders(nn.Module):
         prompt: str | list[str],
         device: torch.device | str = "cuda",
         num_images_per_prompt: int = 1,
-        max_t5_length: Optional[int] = None,
+        max_t5_length: int | None = None,
     ) -> dict[str, torch.Tensor]:
         """Encode text prompts using all three encoders.
 
@@ -267,8 +265,8 @@ class SD3TextEncoders(nn.Module):
 
     def to(
         self,
-        device: Optional[torch.device | str] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
     ):
         """Move encoders to device/dtype.
 

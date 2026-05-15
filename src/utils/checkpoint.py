@@ -6,7 +6,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
-from safetensors.torch import save_file, load_file
+from safetensors.torch import load_file, save_file
 
 from .logging import get_logger
 
@@ -49,7 +49,15 @@ def save_checkpoint(
 
     # Save model weights
     if format in ("safetensors", "both"):
-        save_file(model_state, path / "model.safetensors")
+        # safetensors refuses shared/aliased storage (e.g. T5's
+        # encoder.embed_tokens.weight is the same tensor as shared.weight).
+        # Use save_model which auto-handles aliasing when we have the module.
+        if hasattr(model, "state_dict"):
+            from safetensors.torch import save_model as _save_model
+            target = model.module if hasattr(model, "module") else model
+            _save_model(target, str(path / "model.safetensors"))
+        else:
+            save_file(model_state, path / "model.safetensors")
         logger.info(f"Saved model to {path / 'model.safetensors'}")
 
     if format in ("pytorch", "both"):

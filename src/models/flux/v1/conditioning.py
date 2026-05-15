@@ -11,16 +11,15 @@ Position ID Format (3D) — matches HuggingFace diffusers:
 - w: Width coordinate in patches
 """
 
-from typing import Tuple
 
 import torch
 import torch.nn as nn
 
 # Re-export utilities from v2 conditioning (same format works for v1)
 from ..v2.conditioning import (
+    create_position_ids,
     rearrange_latent_to_sequence,
     rearrange_sequence_to_latent,
-    create_position_ids,
 )
 
 
@@ -31,7 +30,7 @@ def prepare_kontext_conditioning(
     dtype: torch.dtype,
     patch_size: int = 2,
     time_offset: float = 1.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Prepare Kontext conditioning for FLUX.1.
 
     Similar to FLUX.2 but uses 16 latent channels (vs 32 for FLUX.2 dev).

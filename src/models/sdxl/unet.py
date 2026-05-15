@@ -1,18 +1,17 @@
 """SDXL UNet2DConditionModel implementation."""
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
 from ..components.embeddings import (
-    Timesteps,
     TimestepEmbedding,
+    Timesteps,
 )
 from ..components.resnet import (
-    ResnetBlock2D,
     Downsample2D,
+    ResnetBlock2D,
     Upsample2D,
 )
 from ..components.transformer import Transformer2DModel
@@ -70,7 +69,7 @@ class CrossAttnDownBlock2D(nn.Module):
         hidden_states: torch.Tensor,
         temb: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-    ) -> Tuple[torch.Tensor, list[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         output_states = []
 
         for resnet, attn in zip(self.resnets, self.attentions):
@@ -123,8 +122,8 @@ class DownBlock2D(nn.Module):
         self,
         hidden_states: torch.Tensor,
         temb: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, list[torch.Tensor]]:
+        encoder_hidden_states: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         output_states = []
 
         for resnet in self.resnets:
@@ -192,7 +191,7 @@ class CrossAttnUpBlock2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        res_hidden_states_tuple: Tuple[torch.Tensor, ...],
+        res_hidden_states_tuple: tuple[torch.Tensor, ...],
         temb: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
     ) -> torch.Tensor:
@@ -250,9 +249,9 @@ class UpBlock2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        res_hidden_states_tuple: Tuple[torch.Tensor, ...],
+        res_hidden_states_tuple: tuple[torch.Tensor, ...],
         temb: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
     ) -> torch.Tensor:
         for resnet in self.resnets:
             res_hidden = res_hidden_states_tuple[-1]
@@ -464,9 +463,9 @@ class SDXLUNet(nn.Module):
         sample: torch.Tensor,
         timestep: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        added_cond_kwargs: Optional[dict] = None,
-        down_block_additional_residuals: Optional[list[torch.Tensor]] = None,
-        mid_block_additional_residual: Optional[torch.Tensor] = None,
+        added_cond_kwargs: dict | None = None,
+        down_block_additional_residuals: list[torch.Tensor] | None = None,
+        mid_block_additional_residual: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

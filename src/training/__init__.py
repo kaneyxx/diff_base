@@ -7,18 +7,26 @@ from omegaconf import DictConfig
 from .base_trainer import BaseTrainer
 
 if TYPE_CHECKING:
-    from .lora_trainer import LoRATrainer
-    from .finetune_trainer import FullFinetuneTrainer
-    from .dreambooth_trainer import DreamBoothTrainer
-    from .controlnet_trainer import ControlNetTrainer
+    from .controlnet_trainer import ControlNetTrainer  # noqa: F401
+    from .dreambooth_trainer import DreamBoothTrainer  # noqa: F401
+    from .finetune_trainer import FullFinetuneTrainer  # noqa: F401
+    from .flux_full_finetune_trainer import FluxFullFinetuneTrainer  # noqa: F401
+    from .kontext_trainer import (  # noqa: F401
+        KontextFullFinetuneTrainer,
+        KontextLoRATrainer,
+    )
+    from .lora_trainer import LoRATrainer  # noqa: F401
 
 
 TRAINER_REGISTRY = {
     "lora": "LoRATrainer",
     "full_finetune": "FullFinetuneTrainer",
+    "flux_full_finetune": "FluxFullFinetuneTrainer",
     "dreambooth": "DreamBoothTrainer",
     "controlnet": "ControlNetTrainer",
     "textual_inversion": "TextualInversionTrainer",
+    "kontext_lora": "KontextLoRATrainer",
+    "kontext_finetune": "KontextFullFinetuneTrainer",
 }
 
 
@@ -60,6 +68,15 @@ def create_trainer(config: DictConfig) -> BaseTrainer:
     elif method == "textual_inversion":
         from .textual_inversion_trainer import TextualInversionTrainer
         return TextualInversionTrainer(config)
+    elif method == "flux_full_finetune":
+        from .flux_full_finetune_trainer import FluxFullFinetuneTrainer
+        return FluxFullFinetuneTrainer(config)
+    elif method == "kontext_lora":
+        from .kontext_trainer import KontextLoRATrainer
+        return KontextLoRATrainer(config)
+    elif method == "kontext_finetune":
+        from .kontext_trainer import KontextFullFinetuneTrainer
+        return KontextFullFinetuneTrainer(config)
     else:
         raise ValueError(f"Trainer not implemented: {trainer_name}")
 
@@ -67,4 +84,7 @@ def create_trainer(config: DictConfig) -> BaseTrainer:
 __all__ = [
     "BaseTrainer",
     "create_trainer",
+    "FluxFullFinetuneTrainer",
+    "KontextLoRATrainer",
+    "KontextFullFinetuneTrainer",
 ]

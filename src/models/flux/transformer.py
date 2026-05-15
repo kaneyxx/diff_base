@@ -1,14 +1,12 @@
 """Flux Transformer (DiT) architecture."""
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
 from ..components.attention import JointAttention
-from ..components.embeddings import RotaryEmbedding, MLPEmbedder
-from ..components.transformer import RMSNorm
+from ..components.embeddings import MLPEmbedder, RotaryEmbedding
 
 
 class FluxSingleTransformerBlock(nn.Module):
@@ -54,7 +52,7 @@ class FluxSingleTransformerBlock(nn.Module):
         self,
         hidden_states: torch.Tensor,
         temb: torch.Tensor,
-        rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -136,9 +134,9 @@ class FluxJointTransformerBlock(nn.Module):
         img_hidden_states: torch.Tensor,
         txt_hidden_states: torch.Tensor,
         temb: torch.Tensor,
-        img_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        txt_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        img_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        txt_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -200,7 +198,7 @@ class AdaLayerNormZero(nn.Module):
         self,
         x: torch.Tensor,
         emb: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         emb = self.silu(emb)
         emb = self.linear(emb)[:, None, :]
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, dim=-1)
@@ -221,7 +219,7 @@ class AdaLayerNormZeroSingle(nn.Module):
         self,
         x: torch.Tensor,
         emb: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         emb = self.silu(emb)
         emb = self.linear(emb)[:, None, :]
         shift, scale, gate = emb.chunk(3, dim=-1)
@@ -290,7 +288,7 @@ class FluxTransformer(nn.Module):
         timestep: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
+        guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

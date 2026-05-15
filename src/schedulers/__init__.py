@@ -17,6 +17,7 @@ SCHEDULER_REGISTRY = {
     "euler": EulerDiscreteScheduler,
     "euler_discrete": EulerDiscreteScheduler,
     "flow_matching": FlowMatchingScheduler,
+    "flow_matching_euler": FlowMatchingScheduler,
 }
 
 

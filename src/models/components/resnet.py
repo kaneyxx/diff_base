@@ -1,6 +1,5 @@
 """ResNet blocks and sampling layers for UNet architectures."""
 
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -13,13 +12,13 @@ class ResnetBlock2D(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        out_channels: Optional[int] = None,
-        temb_channels: Optional[int] = None,
+        out_channels: int | None = None,
+        temb_channels: int | None = None,
         groups: int = 32,
-        groups_out: Optional[int] = None,
+        groups_out: int | None = None,
         eps: float = 1e-6,
         dropout: float = 0.0,
-        use_shortcut: Optional[bool] = None,
+        use_shortcut: bool | None = None,
         output_scale_factor: float = 1.0,
         up: bool = False,
         down: bool = False,
@@ -85,7 +84,7 @@ class ResnetBlock2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
+        temb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -139,7 +138,7 @@ class Downsample2D(nn.Module):
         self,
         channels: int,
         use_conv: bool = True,
-        out_channels: Optional[int] = None,
+        out_channels: int | None = None,
         padding: int = 1,
         name: str = "conv",
     ):
@@ -192,7 +191,7 @@ class Upsample2D(nn.Module):
         self,
         channels: int,
         use_conv: bool = True,
-        out_channels: Optional[int] = None,
+        out_channels: int | None = None,
         name: str = "conv",
         interpolate: bool = True,
     ):
@@ -224,7 +223,7 @@ class Upsample2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        output_size: Optional[tuple[int, int]] = None,
+        output_size: tuple[int, int] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -258,7 +257,7 @@ class DownEncoderBlock2D(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        temb_channels: Optional[int] = None,
+        temb_channels: int | None = None,
         num_layers: int = 1,
         resnet_groups: int = 32,
         dropout: float = 0.0,
@@ -307,7 +306,7 @@ class DownEncoderBlock2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
+        temb: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """Forward pass.
 
@@ -340,7 +339,7 @@ class UpDecoderBlock2D(nn.Module):
         in_channels: int,
         out_channels: int,
         prev_output_channels: int,
-        temb_channels: Optional[int] = None,
+        temb_channels: int | None = None,
         num_layers: int = 1,
         resnet_groups: int = 32,
         dropout: float = 0.0,
@@ -386,8 +385,8 @@ class UpDecoderBlock2D(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        skip_states: Optional[list[torch.Tensor]] = None,
-        temb: Optional[torch.Tensor] = None,
+        skip_states: list[torch.Tensor] | None = None,
+        temb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

@@ -11,24 +11,23 @@ Image Editing Support:
 """
 
 from pathlib import Path
-from typing import Dict, Literal, Optional, Tuple
+from typing import Literal
 
 import torch
-import torch.nn as nn
 from omegaconf import DictConfig
 from safetensors.torch import load_file
 
+from ....utils.logging import get_logger
 from ...base import BaseDiffusionModel
+from .conditioning import (
+    create_position_ids,
+    prepare_fill_conditioning,
+    prepare_kontext_conditioning,
+    rearrange_latent_to_sequence,
+)
+from .text_encoder import Flux2TextEncoders
 from .transformer import Flux2Transformer
 from .vae import Flux2VAE
-from .text_encoder import Flux2TextEncoders
-from .conditioning import (
-    prepare_kontext_conditioning,
-    prepare_fill_conditioning,
-    rearrange_latent_to_sequence,
-    get_fill_extra_channels,
-)
-from ....utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -75,11 +74,11 @@ class Flux2Model(BaseDiffusionModel):
         latents: torch.Tensor,
         timesteps: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        pooled_projections: Optional[torch.Tensor] = None,
-        guidance: Optional[torch.Tensor] = None,
-        img_cond_seq: Optional[torch.Tensor] = None,
-        img_cond_seq_ids: Optional[torch.Tensor] = None,
-        img_cond: Optional[torch.Tensor] = None,
+        pooled_projections: torch.Tensor | None = None,
+        guidance: torch.Tensor | None = None,
+        img_cond_seq: torch.Tensor | None = None,
+        img_cond_seq_ids: torch.Tensor | None = None,
+        img_cond: torch.Tensor | None = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through Transformer.
@@ -165,9 +164,9 @@ class Flux2Model(BaseDiffusionModel):
         self,
         images: torch.Tensor,
         mode: Literal["kontext", "fill"] = "kontext",
-        mask: Optional[torch.Tensor] = None,
+        mask: torch.Tensor | None = None,
         patch_size: int = 2,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Encode reference images for conditioning.
 
         This method prepares reference images for use with FLUX.2 image editing:
@@ -317,6 +316,102 @@ class Flux2Model(BaseDiffusionModel):
             logger.warning(f"VAE unexpected keys: {len(unexpected)}")
         logger.info("Loaded VAE weights")
 
+    def compute_image_seq_len(self, latent: torch.Tensor, patch_size: int = 2) -> int:
+        """Return the number of image tokens produced by patchifying a latent.
+
+        Args:
+            latent: Latent tensor of shape ``[B, C, H, W]``.
+            patch_size: Patch size used for patchification (default 2).
+
+        Returns:
+            Integer number of image tokens ``(H // patch_size) * (W // patch_size)``.
+        """
+        _, _, H, W = latent.shape
+        return (H // patch_size) * (W // patch_size)
+
+    def prepare_training_inputs(
+        self,
+        noisy_latent: torch.Tensor,
+        timestep: torch.Tensor,
+        text_outputs: dict[str, torch.Tensor],
+        guidance_value: float = 1.0,
+        batch: dict | None = None,
+        patch_size: int = 2,
+    ) -> dict[str, torch.Tensor]:
+        """Convert latent + text + optional reference into transformer-ready inputs.
+
+        Handles FLUX.2-specific differences: larger in_channels (128-512 depending
+        on variant), 4D RoPE axes, and optional Fill-mode conditioning.
+
+        Args:
+            noisy_latent: Noisy image latent ``[B, C, H, W]``.
+            timestep: Per-sample timesteps ``[B]`` in ``[0, 1]``.
+            text_outputs: Dict from ``encode_text()`` with keys
+                ``"prompt_embeds"`` and ``"pooled_prompt_embeds"``.
+            guidance_value: Guidance scale to embed.
+            batch: Optional full batch dict. If ``"reference_pixel"`` is present,
+                Kontext conditioning is built. If ``"img_cond"`` is present, it is
+                passed through directly (Fill mode pre-computed by dataset).
+            patch_size: Patch size for patchification (default 2).
+
+        Returns:
+            Dict of keyword arguments ready to pass to ``model.transformer(**inputs)``.
+        """
+        B = noisy_latent.shape[0]
+        device = noisy_latent.device
+        dtype = noisy_latent.dtype
+
+        # Patchify noisy latent [B, C, H, W] → [B, seq, C*patch²]
+        hidden_states = rearrange_latent_to_sequence(noisy_latent, patch_size=patch_size)
+
+        # Build target position IDs (stream = 0)
+        _, _, H, W = noisy_latent.shape
+        h_pat, w_pat = H // patch_size, W // patch_size
+        img_ids = create_position_ids(
+            batch_size=B,
+            height=h_pat,
+            width=w_pat,
+            device=device,
+            dtype=dtype,
+            time_offset=0.0,
+        )
+
+        # Guidance tensor
+        guidance: torch.Tensor | None = None
+        if self.use_guidance:
+            guidance = torch.full(
+                (B,), guidance_value, device=device, dtype=dtype
+            )
+
+        inputs: dict[str, torch.Tensor] = {
+            "hidden_states": hidden_states,
+            "timestep": timestep,
+            "encoder_hidden_states": text_outputs["prompt_embeds"],
+            "pooled_projections": text_outputs.get("pooled_prompt_embeds"),
+            "img_ids": img_ids,
+            "guidance": guidance,
+        }
+
+        if batch is not None:
+            # Kontext mode: encode reference image on-the-fly
+            if "reference_pixel" in batch:
+                with torch.no_grad():
+                    img_cond_seq, img_cond_seq_ids = prepare_kontext_conditioning(
+                        reference_images=batch["reference_pixel"].to(device, dtype=dtype),
+                        vae=self.vae,
+                        device=device,
+                        dtype=dtype,
+                        patch_size=patch_size,
+                    )
+                inputs["img_cond_seq"] = img_cond_seq
+                inputs["img_cond_seq_ids"] = img_cond_seq_ids
+
+            # Fill mode: pre-computed by dataset, pass through directly
+            elif "img_cond" in batch:
+                inputs["img_cond"] = batch["img_cond"].to(device, dtype=dtype)
+
+        return inputs
+
     def enable_gradient_checkpointing(self) -> None:
         """Enable gradient checkpointing."""
         self.transformer.enable_gradient_checkpointing()
@@ -340,7 +435,7 @@ class Flux2Model(BaseDiffusionModel):
         width: int,
         device: torch.device | str,
         dtype: torch.dtype,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Prepare random latents for generation.
 
@@ -375,8 +470,8 @@ class Flux2Model(BaseDiffusionModel):
 
     def to(
         self,
-        device: Optional[torch.device | str] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
     ):
         """Move model to device/dtype."""
         if device is not None or dtype is not None:

@@ -1,7 +1,6 @@
 """LoRA (Low-Rank Adaptation) implementation using peft library."""
 
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -17,7 +16,7 @@ def inject_lora_layers(
     rank: int = 16,
     alpha: float = 16.0,
     dropout: float = 0.0,
-    target_modules: Optional[list[str]] = None,
+    target_modules: list[str] | None = None,
     use_peft: bool = True,
 ) -> nn.Module:
     """Inject LoRA layers into model.
@@ -182,7 +181,7 @@ def get_lora_parameters(model: nn.Module) -> list[nn.Parameter]:
 def save_lora_weights(
     model: nn.Module,
     path: str | Path,
-    config: Optional[DictConfig] = None,
+    config: DictConfig | None = None,
 ) -> None:
     """Save only LoRA weights.
 
@@ -191,8 +190,9 @@ def save_lora_weights(
         path: Output path.
         config: Training config for metadata.
     """
-    from safetensors.torch import save_file
     import json
+
+    from safetensors.torch import save_file
 
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -286,7 +286,7 @@ def merge_lora_weights(model: nn.Module) -> nn.Module:
         return model.merge_and_unload()
 
     # Manual merge
-    for name, module in model.named_modules():
+    for _name, module in model.named_modules():
         if hasattr(module, "base_layer") and hasattr(module, "lora_A"):
             # Merge LoRA into base
             weight = module.base_layer.weight.data

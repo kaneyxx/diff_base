@@ -19,7 +19,6 @@ Position ID Format (3D) — matches HuggingFace diffusers:
 - w: Width coordinate in patches
 """
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -152,7 +151,7 @@ def prepare_kontext_conditioning(
     dtype: torch.dtype,
     patch_size: int = 2,
     time_offset: float = 1.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Prepare Kontext conditioning from reference images.
 
     Encodes reference images through VAE and converts to sequence format

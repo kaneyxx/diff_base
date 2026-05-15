@@ -30,22 +30,20 @@ HuggingFace state dict key naming:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
+from ...components.embeddings import TimestepEmbedding, Timesteps
 from ..base_transformer import FluxTransformerBase
 from ..components.embeddings import (
     FluxPosEmbed,
     compute_rope_from_position_ids,
 )
 from ..components.layers import AdaLayerNormContinuous, Flux2Modulation
-from ...components.embeddings import TimestepEmbedding, Timesteps
-from .blocks import Flux2TransformerBlock, Flux2SingleTransformerBlock
+from .blocks import Flux2SingleTransformerBlock, Flux2TransformerBlock
 from .conditioning import create_position_ids
-
 
 # FLUX.2 RoPE defaults
 FLUX2_AXES_DIM = (32, 32, 32, 32)
@@ -103,10 +101,13 @@ class Flux2TimestepGuidanceEmbeddings(nn.Module):
         Returns:
             Combined time+guidance embedding [B, embedding_dim].
         """
-        t_emb = self.time_proj(timestep)
+        # time_proj returns fp32; cast to embedder weight dtype for bf16/fp16 models.
+        param_dtype = next(self.timestep_embedder.parameters()).dtype
+
+        t_emb = self.time_proj(timestep).to(param_dtype)
         t_emb = self.timestep_embedder(t_emb)
 
-        g_emb = self.time_proj(guidance)
+        g_emb = self.time_proj(guidance).to(param_dtype)
         g_emb = self.guidance_embedder(g_emb)
 
         return t_emb + g_emb
@@ -156,19 +157,38 @@ class Flux2Transformer(FluxTransformerBase):
         },
     }
 
+    #: ``*-base`` are un-distilled siblings of the same architectures —
+    #: only the published weights differ, so the model config is identical.
+    #: Trainer-side distilled-variant refusal uses these aliases to allow
+    #: full fine-tuning while still blocking the distilled forms.
+    VARIANT_ALIASES: dict[str, str] = {
+        "klein-4b-base": "klein-4b",
+        "klein-9b-base": "klein-9b",
+    }
+
     def __init__(self, config: DictConfig, variant: str = "dev"):
         """Initialize FLUX.2 transformer.
 
         Args:
             config: Transformer configuration.
-            variant: Model variant ("dev", "klein-4b", or "klein-9b").
+            variant: Model variant. Recognised:
+                - "dev"
+                - "klein-4b" / "klein-4b-base"
+                - "klein-9b" / "klein-9b-base"
+                (``*-base`` denotes the un-distilled weights but identical arch.)
         """
         super().__init__()
         self.config = config
         self.variant = variant
-
-        # Get variant defaults, allow config overrides
-        variant_cfg = self.VARIANT_CONFIGS.get(variant, self.VARIANT_CONFIGS["dev"])
+        # Resolve aliases (e.g. ``klein-4b-base`` → ``klein-4b``) for config lookup.
+        resolved = self.VARIANT_ALIASES.get(variant, variant)
+        if resolved not in self.VARIANT_CONFIGS:
+            raise ValueError(
+                f"Unknown FLUX.2 variant '{variant}'. Known variants: "
+                f"{sorted(self.VARIANT_CONFIGS)} (plus -base aliases "
+                f"{sorted(self.VARIANT_ALIASES)})."
+            )
+        variant_cfg = self.VARIANT_CONFIGS[resolved]
 
         hidden_size = config.get("hidden_size", variant_cfg["hidden_size"])
         num_heads = config.get("num_attention_heads", variant_cfg["num_attention_heads"])
@@ -258,14 +278,14 @@ class Flux2Transformer(FluxTransformerBase):
         timestep: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
-        img_ids: Optional[torch.Tensor] = None,
-        txt_ids: Optional[torch.Tensor] = None,
-        img_cond_seq: Optional[torch.Tensor] = None,
-        img_cond_seq_ids: Optional[torch.Tensor] = None,
-        img_cond: Optional[torch.Tensor] = None,
-        return_hidden_states_at: Optional[List[int]] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[int, torch.Tensor]]]:
+        guidance: torch.Tensor | None = None,
+        img_ids: torch.Tensor | None = None,
+        txt_ids: torch.Tensor | None = None,
+        img_cond_seq: torch.Tensor | None = None,
+        img_cond_seq_ids: torch.Tensor | None = None,
+        img_cond: torch.Tensor | None = None,
+        return_hidden_states_at: list[int] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[int, torch.Tensor]]:
         """Forward pass matching HuggingFace Flux2Transformer2DModel.
 
         Timestep scaling:
@@ -322,6 +342,8 @@ class Flux2Transformer(FluxTransformerBase):
             )
 
         # === Handle Kontext mode (sequence-wise concatenation) ===
+        # Track base (target-only) sequence length for output slicing
+        target_seq_len = base_seq_len
         if img_cond_seq is not None:
             ref_embedded = self.x_embedder(img_cond_seq)
             hidden_states = torch.cat([hidden_states, ref_embedded], dim=1)
@@ -415,8 +437,12 @@ class Flux2Transformer(FluxTransformerBase):
                 rotary_emb=combined_rotary_emb,
             )
 
-        # === Extract image tokens (remove text prefix) ===
+        # === Extract image tokens (remove text prefix, then Kontext reference tokens) ===
         hidden_states = hidden_states[:, txt_seq_len:]
+        # In Kontext mode, the image sequence contains target + reference tokens;
+        # slice to target-only length so callers get the expected output shape.
+        if img_cond_seq is not None:
+            hidden_states = hidden_states[:, :target_seq_len]
 
         # === Project output ===
         hidden_states = self.norm_out(hidden_states, temb)

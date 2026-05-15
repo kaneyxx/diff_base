@@ -1,6 +1,5 @@
 """Transformer components for diffusion models."""
 
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -13,7 +12,7 @@ class FeedForward(nn.Module):
     def __init__(
         self,
         dim: int,
-        dim_out: Optional[int] = None,
+        dim_out: int | None = None,
         mult: float = 4.0,
         dropout: float = 0.0,
         activation_fn: str = "geglu",
@@ -92,7 +91,7 @@ class AdaLayerNorm(nn.Module):
         self,
         embedding_dim: int,
         num_embeddings: int = 1000,
-        output_dim: Optional[int] = None,
+        output_dim: int | None = None,
     ):
         """Initialize adaptive layer norm.
 
@@ -138,7 +137,7 @@ class AdaLayerNormZero(nn.Module):
     def __init__(
         self,
         embedding_dim: int,
-        num_embeddings: Optional[int] = None,
+        num_embeddings: int | None = None,
     ):
         """Initialize adaptive layer norm zero.
 
@@ -249,11 +248,11 @@ class Transformer2DModel(nn.Module):
         self,
         num_attention_heads: int = 16,
         attention_head_dim: int = 88,
-        in_channels: Optional[int] = None,
-        out_channels: Optional[int] = None,
+        in_channels: int | None = None,
+        out_channels: int | None = None,
         num_layers: int = 1,
         dropout: float = 0.0,
-        cross_attention_dim: Optional[int] = None,
+        cross_attention_dim: int | None = None,
         attention_bias: bool = False,
         activation_fn: str = "geglu",
         norm_num_groups: int = 32,
@@ -313,8 +312,8 @@ class Transformer2DModel(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         return_dict: bool = True,
     ) -> torch.Tensor:
         """Forward pass.

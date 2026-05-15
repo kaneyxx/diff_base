@@ -17,7 +17,6 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -47,13 +46,13 @@ class FluxTransformerBase(nn.Module, ABC):
         timestep: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         pooled_projections: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
-        img_ids: Optional[torch.Tensor] = None,
-        txt_ids: Optional[torch.Tensor] = None,
-        img_cond_seq: Optional[torch.Tensor] = None,
-        img_cond_seq_ids: Optional[torch.Tensor] = None,
-        return_hidden_states_at: Optional[List[int]] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[int, torch.Tensor]]]:
+        guidance: torch.Tensor | None = None,
+        img_ids: torch.Tensor | None = None,
+        txt_ids: torch.Tensor | None = None,
+        img_cond_seq: torch.Tensor | None = None,
+        img_cond_seq_ids: torch.Tensor | None = None,
+        return_hidden_states_at: list[int] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[int, torch.Tensor]]:
         """Unified forward signature for all FLUX variants.
 
         Timestep convention:

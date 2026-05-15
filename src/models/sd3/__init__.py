@@ -22,14 +22,13 @@ from typing import Dict, Tuple
 
 from omegaconf import DictConfig
 
+from .mmdit import SD3_VARIANT_CONFIGS, SD3Transformer
 from .model import SD3Model
-from .mmdit import SD3Transformer, SD3_VARIANT_CONFIGS
-from .vae import SD3VAE
 from .text_encoder import SD3TextEncoders
-
+from .vae import SD3VAE
 
 # Variant mapping: user-facing names -> (variant_key)
-VARIANT_ALIASES: Dict[str, str] = {
+VARIANT_ALIASES: dict[str, str] = {
     # SD3.5-Large
     "large": "large",
     "sd3-large": "large",
@@ -87,7 +86,7 @@ def create_sd3_model(config: DictConfig) -> SD3Model:
     return SD3Model(config)
 
 
-def get_available_variants() -> Dict[str, Dict]:
+def get_available_variants() -> dict[str, dict]:
     """Get all available SD3 variants and their configurations.
 
     Returns:
@@ -96,7 +95,7 @@ def get_available_variants() -> Dict[str, Dict]:
     return SD3_VARIANT_CONFIGS.copy()
 
 
-def get_variant_info(variant: str) -> Dict:
+def get_variant_info(variant: str) -> dict:
     """Get configuration info for a specific variant.
 
     Args:

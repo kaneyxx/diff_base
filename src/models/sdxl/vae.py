@@ -1,13 +1,11 @@
 """SDXL VAE (AutoencoderKL) implementation."""
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from ..components.resnet import ResnetBlock2D, Downsample2D, Upsample2D
-from ..components.attention import SelfAttention
+from ..components.resnet import Downsample2D, ResnetBlock2D, Upsample2D
 
 
 class Encoder(nn.Module):
@@ -17,7 +15,7 @@ class Encoder(nn.Module):
         self,
         in_channels: int = 3,
         out_channels: int = 4,
-        block_out_channels: Tuple[int, ...] = (128, 256, 512, 512),
+        block_out_channels: tuple[int, ...] = (128, 256, 512, 512),
         layers_per_block: int = 2,
         norm_num_groups: int = 32,
         double_z: bool = True,
@@ -115,7 +113,7 @@ class Decoder(nn.Module):
         self,
         in_channels: int = 4,
         out_channels: int = 3,
-        block_out_channels: Tuple[int, ...] = (128, 256, 512, 512),
+        block_out_channels: tuple[int, ...] = (128, 256, 512, 512),
         layers_per_block: int = 2,
         norm_num_groups: int = 32,
     ):
@@ -212,7 +210,7 @@ class AttentionBlock(nn.Module):
     def __init__(
         self,
         channels: int,
-        num_head_channels: Optional[int] = None,
+        num_head_channels: int | None = None,
         norm_num_groups: int = 32,
         rescale_output_factor: float = 1.0,
     ):

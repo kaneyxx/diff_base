@@ -1,8 +1,7 @@
 """Aspect ratio bucketing for multi-resolution training."""
 
-import math
 import random
-from typing import Iterator
+from collections.abc import Iterator
 
 from PIL import Image
 

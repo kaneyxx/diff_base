@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from ...sdxl.vae import Encoder, Decoder, DiagonalGaussianDistribution
+from ...sdxl.vae import Decoder, DiagonalGaussianDistribution, Encoder
 
 
 class Flux2VAE(nn.Module):
@@ -39,20 +39,27 @@ class Flux2VAE(nn.Module):
             "shift_factor": 0.1159,
         },
     }
+    VARIANT_ALIASES = {"klein-4b-base": "klein-4b", "klein-9b-base": "klein-9b"}
 
     def __init__(self, config: DictConfig, variant: str = "dev"):
         """Initialize FLUX.2 VAE.
 
         Args:
             config: VAE configuration.
-            variant: Model variant ("dev", "klein-4b", or "klein-9b").
+            variant: Model variant. Accepts ``dev``, ``klein-4b{,-base}``,
+                ``klein-9b{,-base}``. ``*-base`` are un-distilled weight aliases.
         """
         super().__init__()
         self.config = config
         self.variant = variant
-
-        # Get variant defaults
-        variant_cfg = self.VARIANT_CONFIGS.get(variant, self.VARIANT_CONFIGS["dev"])
+        resolved = self.VARIANT_ALIASES.get(variant, variant)
+        if resolved not in self.VARIANT_CONFIGS:
+            raise ValueError(
+                f"Unknown FLUX.2 VAE variant '{variant}'. "
+                f"Known: {sorted(self.VARIANT_CONFIGS)} "
+                f"(+ aliases {sorted(self.VARIANT_ALIASES)})."
+            )
+        variant_cfg = self.VARIANT_CONFIGS[resolved]
 
         in_channels = config.get("in_channels", 3)
         out_channels = config.get("out_channels", 3)

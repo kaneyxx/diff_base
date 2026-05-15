@@ -1,7 +1,6 @@
 """Flux Text Encoders (T5 and CLIP-L)."""
 
 from pathlib import Path
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -40,10 +39,10 @@ class FluxTextEncoders(nn.Module):
             pretrained_path: Path to Flux model directory.
         """
         from transformers import (
-            T5EncoderModel,
-            T5Tokenizer,
             CLIPTextModel,
             CLIPTokenizer,
+            T5EncoderModel,
+            T5Tokenizer,
         )
 
         pretrained_path = Path(pretrained_path)
@@ -77,7 +76,7 @@ class FluxTextEncoders(nn.Module):
         self,
         prompt: str | list[str],
         device: torch.device | str = "cuda",
-        max_t5_length: Optional[int] = None,
+        max_t5_length: int | None = None,
     ) -> dict[str, torch.Tensor]:
         """Encode text prompts.
 
@@ -141,9 +140,9 @@ class FluxTextEncoders(nn.Module):
         self,
         t5_input_ids: torch.Tensor,
         clip_input_ids: torch.Tensor,
-        t5_attention_mask: Optional[torch.Tensor] = None,
-        clip_attention_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        t5_attention_mask: torch.Tensor | None = None,
+        clip_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with pre-tokenized inputs.
 
         Args:
@@ -174,7 +173,7 @@ class FluxTextEncoders(nn.Module):
 
         return t5_embeds, pooled_embeds
 
-    def to(self, device: torch.device | str, dtype: Optional[torch.dtype] = None):
+    def to(self, device: torch.device | str, dtype: torch.dtype | None = None):
         """Move encoders to device."""
         if self.t5_encoder is not None:
             self.t5_encoder = self.t5_encoder.to(device, dtype=dtype)

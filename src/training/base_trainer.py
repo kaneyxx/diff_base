@@ -2,21 +2,29 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from omegaconf import DictConfig
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from ..models import create_model
 from ..data import create_dataloader
+from ..models import create_model
 from ..schedulers import create_scheduler
-from ..utils.config import config_to_dict
-from ..utils.checkpoint import save_checkpoint, load_checkpoint
-from ..utils.logging import TrainingLogger, MetricsTracker, get_logger
-from ..utils.memory import optimize_memory, get_memory_stats, clear_memory
+from ..utils.checkpoint import load_checkpoint, save_checkpoint
+from ..utils.logging import MetricsTracker, TrainingLogger, get_logger
+from ..utils.memory import optimize_memory
+
+try:  # pragma: no cover — optional import guard
+    from accelerate import Accelerator, DistributedDataParallelKwargs
+
+    _ACCELERATE_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    Accelerator = None  # type: ignore[misc,assignment]
+    DistributedDataParallelKwargs = None  # type: ignore[misc,assignment]
+    _ACCELERATE_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -39,11 +47,22 @@ class BaseTrainer(ABC):
             config: Full training configuration.
         """
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Parse dtype
         dtype_str = config.model.get("dtype", "float32")
         self.dtype = self._parse_dtype(dtype_str)
+
+        # Initialise HuggingFace Accelerator (no-op wrapper for single-GPU runs).
+        # When invoked via `accelerate launch --num_processes N`, each rank's
+        # Accelerator picks the correct device via LOCAL_RANK. Without launch,
+        # this falls back to a single-process Accelerator on the default cuda
+        # device (or CPU if no GPU is available).
+        self.accelerator = self._setup_accelerator()
+        self.device = (
+            self.accelerator.device
+            if self.accelerator is not None
+            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
 
         # Training state
         self.global_step = 0
@@ -59,17 +78,122 @@ class BaseTrainer(ABC):
         logger.info("Initializing optimizer...")
         self.optimizer = self._setup_optimizer()
 
+        # Dataloader must come before lr_scheduler — _get_total_steps reads
+        # len(self.dataloader) when computing the schedule.
+        logger.info("Initializing dataloader...")
+        self.dataloader = self._setup_dataloader()
+
         logger.info("Initializing LR scheduler...")
         self.lr_scheduler = self._setup_lr_scheduler()
 
-        logger.info("Initializing dataloader...")
-        self.dataloader = self._setup_dataloader()
+        # Wrap optimizer + dataloader + lr_scheduler under Accelerator.
+        # Under `accelerate launch --num_processes>1`, prepare() returns a
+        # DistributedDataParallel-wrapped model and a sharded dataloader.
+        # For single-process runs it is effectively a passthrough.
+        #
+        # Only the trainable submodule is handed to prepare(). Passing the
+        # full model wrapper (FluxModel containing transformer + VAE +
+        # text_encoder) breaks DDP when text_encoder.cpu_offload=true,
+        # because DDP requires every parameter on the same device class.
+        # VAE and text_encoder are frozen and accessed directly via
+        # self.model.{vae, text_encoder} — they do not need gradient sync.
+        if self.accelerator is not None:
+            trainable_module = getattr(self.model, "transformer", self.model)
+            prepared_module, self.optimizer, self.dataloader, self.lr_scheduler = (
+                self.accelerator.prepare(
+                    trainable_module,
+                    self.optimizer,
+                    self.dataloader,
+                    self.lr_scheduler,
+                )
+            )
+            if hasattr(self.model, "transformer"):
+                self.model.transformer = prepared_module
+            else:
+                self.model = prepared_module
 
         # Logging
         self.training_logger = TrainingLogger(config)
         self.metrics_tracker = MetricsTracker()
 
         logger.info(f"Trainer initialized on {self.device}")
+
+    # ------------------------------------------------------------------
+    # Accelerator helpers
+    # ------------------------------------------------------------------
+
+    def _setup_accelerator(self):
+        """Instantiate the HuggingFace Accelerator if available.
+
+        Honours ``training.use_accelerator`` (default ``True``). When the
+        accelerate package is not installed or the user explicitly disables
+        it, returns ``None`` and the trainer falls back to the legacy
+        single-GPU path.
+
+        Mixed precision and gradient accumulation are wired from the
+        existing YAML schema, so no new top-level config keys are required.
+        """
+        use_accelerator = self.config.training.get("use_accelerator", True)
+        if not use_accelerator:
+            logger.info("Accelerator disabled via config (use_accelerator=false)")
+            return None
+        if not _ACCELERATE_AVAILABLE:
+            logger.warning(
+                "accelerate not installed; falling back to single-GPU trainer. "
+                "Install `accelerate` to enable multi-GPU launch."
+            )
+            return None
+
+        # `hardware` section is optional in some test fixtures; tolerate absence.
+        hardware_cfg = self.config.get("hardware", {}) if hasattr(
+            self.config, "get"
+        ) else {}
+        mixed_precision = (
+            hardware_cfg.get("mixed_precision", "no")
+            if hasattr(hardware_cfg, "get")
+            else "no"
+        )
+        # Accelerator expects literal strings: "no", "fp16", "bf16", "fp8".
+        # Map common aliases used elsewhere in the config to those literals.
+        mp_alias = {
+            "bfloat16": "bf16",
+            "bf16": "bf16",
+            "float16": "fp16",
+            "fp16": "fp16",
+            "fp8": "fp8",
+            "no": "no",
+            "none": "no",
+            "float32": "no",
+            "fp32": "no",
+        }
+        mp = mp_alias.get(str(mixed_precision).lower(), "no")
+        grad_accum = int(self.config.training.get("gradient_accumulation", 1))
+
+        # LoRA + frozen-base training has many parameters whose grads are
+        # never touched in a given step; DDP needs `find_unused_parameters`
+        # set so the all-reduce skip-list is computed dynamically each step.
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        accelerator = Accelerator(
+            mixed_precision=mp,
+            gradient_accumulation_steps=max(1, grad_accum),
+            kwargs_handlers=[ddp_kwargs],
+        )
+        logger.info(
+            "Accelerator initialised: device=%s, num_processes=%d, "
+            "mixed_precision=%s, gradient_accumulation=%d",
+            accelerator.device,
+            accelerator.num_processes,
+            mp,
+            grad_accum,
+        )
+        return accelerator
+
+    @property
+    def is_main_process(self) -> bool:
+        """True on the rank-0 process, or always when Accelerator is disabled."""
+        if self.accelerator is None:
+            return True
+        return self.accelerator.is_main_process
 
     def _parse_dtype(self, dtype_str: str) -> torch.dtype:
         """Parse dtype string to torch.dtype."""
@@ -94,7 +218,10 @@ class BaseTrainer(ABC):
         # Apply memory optimizations
         model = optimize_memory(model, self.config, self.device)
 
-        # Move to device
+        # Move to device. When an Accelerator is active, prepare() will move
+        # the trainable parameters and wrap in DDP later. Calling .to(device)
+        # here is still correct for the frozen VAE/text-encoder parameters
+        # (these are not handed to prepare()).
         model = model.to(self.device)
 
         return model
@@ -117,14 +244,38 @@ class BaseTrainer(ABC):
         """
         pass
 
-    def _setup_lr_scheduler(self) -> Optional[Any]:
+    def _setup_lr_scheduler(self) -> Any | None:
         """Setup learning rate scheduler.
 
         Returns:
             LR scheduler or None.
+
+        Note on warmup:
+            When warmup_steps > 0 a LinearLR warmup phase is prepended via
+            SequentialLR.  warmup_steps is clamped to at most total_steps-1 so
+            that degenerate smoke runs (max_steps < warmup_steps) still work.
         """
         sched_config = self.config.training.get("lr_scheduler", {})
         sched_type = sched_config.get("type", "constant")
+        warmup_steps = int(sched_config.get("warmup_steps", 0))
+
+        def _with_warmup(main_scheduler, total_steps: int, warmup_steps: int):
+            """Wrap main_scheduler with a linear warmup phase if requested."""
+            if warmup_steps <= 0:
+                return main_scheduler
+            # Clamp so smoke runs (total_steps < warmup_steps) don't break.
+            warmup_steps = min(warmup_steps, max(1, total_steps - 1))
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                self.optimizer,
+                start_factor=1e-8,
+                end_factor=1.0,
+                total_iters=warmup_steps,
+            )
+            return torch.optim.lr_scheduler.SequentialLR(
+                self.optimizer,
+                schedulers=[warmup, main_scheduler],
+                milestones=[warmup_steps],
+            )
 
         if sched_type == "constant":
             return torch.optim.lr_scheduler.ConstantLR(
@@ -132,24 +283,26 @@ class BaseTrainer(ABC):
             )
         elif sched_type == "cosine":
             total_steps = self._get_total_steps()
-            warmup_steps = sched_config.get("warmup_steps", 0)
             min_lr_ratio = sched_config.get("min_lr_ratio", 0.0)
-
-            return torch.optim.lr_scheduler.CosineAnnealingLR(
+            # Cosine phase covers the steps after warmup.
+            cosine_steps = max(1, total_steps - min(warmup_steps, max(1, total_steps - 1)))
+            main = torch.optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
-                T_max=total_steps - warmup_steps,
+                T_max=cosine_steps,
                 eta_min=self.config.training.learning_rate * min_lr_ratio,
             )
+            return _with_warmup(main, total_steps, warmup_steps)
         elif sched_type == "linear":
             total_steps = self._get_total_steps()
-            warmup_steps = sched_config.get("warmup_steps", 0)
-
-            return torch.optim.lr_scheduler.LinearLR(
+            effective_warmup = min(warmup_steps, max(1, total_steps - 1)) if warmup_steps > 0 else 0
+            decay_steps = max(1, total_steps - effective_warmup)
+            main = torch.optim.lr_scheduler.LinearLR(
                 self.optimizer,
                 start_factor=1.0,
                 end_factor=sched_config.get("end_factor", 0.0),
-                total_iters=total_steps - warmup_steps,
+                total_iters=decay_steps,
             )
+            return _with_warmup(main, total_steps, warmup_steps)
         else:
             logger.warning(f"Unknown scheduler type: {sched_type}, using constant")
             return None
@@ -189,45 +342,77 @@ class BaseTrainer(ABC):
         max_grad_norm = self.config.training.get("max_grad_norm", 1.0)
         save_every = self.config.training.get("save_every_n_epochs", 1)
 
-        logger.info(f"Starting training for {self.config.training.epochs} epochs")
-        logger.info(f"Gradient accumulation: {grad_accum}")
-        logger.info(f"Effective batch size: {self.config.training.batch_size * grad_accum}")
+        max_steps = self.config.training.get("max_steps", -1)
+        if self.is_main_process:
+            logger.info(f"Starting training for {self.config.training.epochs} epochs")
+            logger.info(f"Gradient accumulation: {grad_accum}")
+            logger.info(f"Effective batch size: {self.config.training.batch_size * grad_accum}")
+            if max_steps > 0:
+                logger.info(f"max_steps={max_steps} — will stop after {max_steps} optimizer steps")
 
+        done = False
         for epoch in range(self.config.training.epochs):
+            if done:
+                break
             self.current_epoch = epoch
             epoch_loss = 0.0
 
             progress = tqdm(
                 self.dataloader,
                 desc=f"Epoch {epoch + 1}/{self.config.training.epochs}",
+                disable=not self.is_main_process,
             )
 
             for step, batch in enumerate(progress):
-                # Move batch to device
+                if max_steps > 0 and self.global_step >= max_steps:
+                    done = True
+                    break
+                # Move batch to device (accelerate.prepare() will already have
+                # produced device-aware tensors when iterating its dataloader,
+                # but _prepare_batch is also called by non-accelerate paths).
                 batch = self._prepare_batch(batch)
 
-                # Forward pass with mixed precision
-                with torch.autocast(
-                    device_type="cuda",
-                    dtype=self.dtype,
-                    enabled=self.dtype != torch.float32,
-                ):
+                # Forward + backward. When Accelerator is active we route
+                # autocast through ``self.accelerator.autocast()`` so the
+                # context honours the mixed_precision value the Accelerator
+                # was constructed with. Without Accelerator we fall back to
+                # the existing manual ``torch.autocast`` block.
+                if self.accelerator is not None:
+                    autocast_ctx = self.accelerator.autocast()
+                else:
+                    autocast_ctx = torch.autocast(
+                        device_type="cuda",
+                        dtype=self.dtype,
+                        enabled=self.dtype != torch.float32,
+                    )
+                with autocast_ctx:
                     loss = self.training_step(batch)
                     loss = loss / grad_accum
 
-                # Backward pass
-                loss.backward()
+                # Backward pass — route through Accelerator when present so
+                # gradient scaling + DDP all-reduce work correctly.
+                if self.accelerator is not None:
+                    self.accelerator.backward(loss)
+                else:
+                    loss.backward()
 
                 epoch_loss += loss.item() * grad_accum
 
                 # Optimizer step
                 if (step + 1) % grad_accum == 0:
-                    # Gradient clipping
+                    # Gradient clipping — Accelerator's helper performs the
+                    # correct unscale-then-clip ordering under mixed precision.
                     if max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            self._get_trainable_params(),
-                            max_norm=max_grad_norm,
-                        )
+                        if self.accelerator is not None:
+                            self.accelerator.clip_grad_norm_(
+                                self._get_trainable_params(),
+                                max_norm=max_grad_norm,
+                            )
+                        else:
+                            torch.nn.utils.clip_grad_norm_(
+                                self._get_trainable_params(),
+                                max_norm=max_grad_norm,
+                            )
 
                     self.optimizer.step()
                     if self.lr_scheduler is not None:
@@ -236,39 +421,47 @@ class BaseTrainer(ABC):
 
                     self.global_step += 1
 
-                    # Logging
+                    # Logging (rank-0 only)
                     current_lr = self.optimizer.param_groups[0]["lr"]
-                    self.metrics_tracker.update({
-                        "loss": loss.item() * grad_accum,
-                        "lr": current_lr,
-                    })
-
-                    if self.global_step % 10 == 0:
-                        self.training_logger.log({
-                            "loss": self.metrics_tracker.get_average("loss"),
+                    if self.is_main_process:
+                        self.metrics_tracker.update({
+                            "loss": loss.item() * grad_accum,
                             "lr": current_lr,
-                            "step": self.global_step,
-                            "epoch": epoch,
-                        }, step=self.global_step)
+                        })
 
-                progress.set_postfix(
-                    loss=loss.item() * grad_accum,
-                    lr=f"{self.optimizer.param_groups[0]['lr']:.2e}",
-                )
+                        if self.global_step % 10 == 0:
+                            self.training_logger.log({
+                                "loss": self.metrics_tracker.get_average("loss"),
+                                "lr": current_lr,
+                                "step": self.global_step,
+                                "epoch": epoch,
+                            }, step=self.global_step)
+
+                if self.is_main_process:
+                    progress.set_postfix(
+                        loss=loss.item() * grad_accum,
+                        lr=f"{self.optimizer.param_groups[0]['lr']:.2e}",
+                    )
 
             # Epoch complete
             avg_loss = epoch_loss / len(self.dataloader)
-            logger.info(f"Epoch {epoch + 1} complete. Average loss: {avg_loss:.4f}")
+            if self.is_main_process:
+                logger.info(f"Epoch {epoch + 1} complete. Average loss: {avg_loss:.4f}")
 
-            # Save checkpoint
-            if (epoch + 1) % save_every == 0:
+            # Save checkpoint (rank-0 only). Use accelerator.wait_for_everyone()
+            # to ensure all ranks finish the epoch before rank-0 writes to disk.
+            if self.accelerator is not None:
+                self.accelerator.wait_for_everyone()
+            if (epoch + 1) % save_every == 0 and self.is_main_process:
                 self._save_checkpoint()
 
-        # Final save
-        self._save_checkpoint(final=True)
-        self.training_logger.finish()
-
-        logger.info("Training complete!")
+        # Final save — ensure all ranks have finished training first.
+        if self.accelerator is not None:
+            self.accelerator.wait_for_everyone()
+        if self.is_main_process:
+            self._save_checkpoint(final=True)
+            self.training_logger.finish()
+            logger.info("Training complete!")
 
     def _prepare_batch(self, batch: dict) -> dict:
         """Move batch tensors to device.
@@ -295,6 +488,20 @@ class BaseTrainer(ABC):
         """
         return [p for p in self.model.parameters() if p.requires_grad]
 
+    def _unwrap_model(self) -> nn.Module:
+        """Unwrap DDP / Accelerator wrappers to access the underlying model.
+
+        Returns the original ``nn.Module`` regardless of whether
+        ``self.model`` has been wrapped in DistributedDataParallel via
+        ``accelerator.prepare()``. Safe to call on single-process runs and
+        on trainers that pre-date Accelerator integration (legacy tests
+        instantiate subclasses without going through ``BaseTrainer.__init__``).
+        """
+        accel = getattr(self, "accelerator", None)
+        if accel is not None:
+            return accel.unwrap_model(self.model)
+        return self.model
+
     def _save_checkpoint(self, final: bool = False) -> None:
         """Save training checkpoint.
 
@@ -311,7 +518,7 @@ class BaseTrainer(ABC):
 
         save_checkpoint(
             path=checkpoint_dir,
-            model=self.model,
+            model=self._unwrap_model(),
             optimizer=self.optimizer,
             scheduler=self.lr_scheduler,
             step=self.global_step,

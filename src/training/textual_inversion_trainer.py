@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from .base_trainer import BaseTrainer
 from ..utils.logging import get_logger
+from .base_trainer import BaseTrainer
 
 logger = get_logger(__name__)
 
@@ -227,6 +227,7 @@ class TextualInversionTrainer(BaseTrainer):
     def _save_checkpoint(self, final: bool = False) -> None:
         """Save learned embeddings."""
         from pathlib import Path
+
         from safetensors.torch import save_file
 
         output_dir = Path(self.config.experiment.output_dir)

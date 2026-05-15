@@ -2,12 +2,11 @@
 
 import random
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import torch
-from torch.utils.data import Dataset
-from PIL import Image
 from omegaconf import DictConfig
+from PIL import Image
+from torch.utils.data import Dataset
 
 from .transforms import create_transforms
 
@@ -23,12 +22,12 @@ class DreamBoothDataset(Dataset):
         self,
         instance_data_dir: str | Path,
         instance_prompt: str,
-        class_data_dir: Optional[str | Path] = None,
-        class_prompt: Optional[str] = None,
+        class_data_dir: str | Path | None = None,
+        class_prompt: str | None = None,
         resolution: int = 1024,
-        config: Optional[DictConfig] = None,
+        config: DictConfig | None = None,
         center_crop: bool = True,
-        instance_prompt_template: Optional[str] = None,
+        instance_prompt_template: str | None = None,
     ):
         """Initialize DreamBooth dataset.
 
@@ -145,7 +144,7 @@ class DreamBoothWithPriorDataset(Dataset):
         class_data_dir: str | Path,
         class_prompt: str,
         resolution: int = 1024,
-        config: Optional[DictConfig] = None,
+        config: DictConfig | None = None,
         prior_loss_weight: float = 1.0,
     ):
         """Initialize dataset.

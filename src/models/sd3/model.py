@@ -4,18 +4,16 @@ This is the main entry point for SD3.5 models (Large, Large-Turbo, Medium).
 """
 
 from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn as nn
 from omegaconf import DictConfig
 from safetensors.torch import load_file
 
-from ..base import BaseDiffusionModel
-from .mmdit import SD3Transformer, SD3_VARIANT_CONFIGS
-from .vae import SD3VAE
-from .text_encoder import SD3TextEncoders
 from ...utils.logging import get_logger
+from ..base import BaseDiffusionModel
+from .mmdit import SD3_VARIANT_CONFIGS, SD3Transformer
+from .text_encoder import SD3TextEncoders
+from .vae import SD3VAE
 
 logger = get_logger(__name__)
 
@@ -78,7 +76,7 @@ class SD3Model(BaseDiffusionModel):
         latents: torch.Tensor,
         timesteps: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        pooled_projections: Optional[torch.Tensor] = None,
+        pooled_projections: torch.Tensor | None = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through the MM-DiT Transformer.
@@ -280,7 +278,7 @@ class SD3Model(BaseDiffusionModel):
         width: int,
         device: torch.device | str,
         dtype: torch.dtype,
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Prepare random latents for generation.
 
@@ -311,8 +309,8 @@ class SD3Model(BaseDiffusionModel):
 
     def to(
         self,
-        device: Optional[torch.device | str] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
     ):
         """Move model to device/dtype.
 

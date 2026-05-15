@@ -1,7 +1,5 @@
 """Attention mechanisms for diffusion models."""
 
-import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -45,7 +43,7 @@ class SelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -85,7 +83,7 @@ class CrossAttention(nn.Module):
     def __init__(
         self,
         query_dim: int,
-        cross_attention_dim: Optional[int] = None,
+        cross_attention_dim: int | None = None,
         heads: int = 8,
         dim_head: int = 64,
         dropout: float = 0.0,
@@ -120,7 +118,7 @@ class CrossAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -211,8 +209,8 @@ class JointAttention(nn.Module):
         self,
         image_hidden_states: torch.Tensor,
         text_hidden_states: torch.Tensor,
-        image_rotary_emb: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        text_rotary_emb: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        text_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with joint attention.
 
@@ -304,7 +302,7 @@ class AttentionBlock(nn.Module):
         num_heads: int = 8,
         dim_head: int = 64,
         dropout: float = 0.0,
-        context_dim: Optional[int] = None,
+        context_dim: int | None = None,
         use_self_attention: bool = True,
         use_cross_attention: bool = True,
     ):
@@ -345,8 +343,8 @@ class AttentionBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -380,7 +378,7 @@ class BasicTransformerBlock(nn.Module):
         num_heads: int,
         dim_head: int = 64,
         dropout: float = 0.0,
-        context_dim: Optional[int] = None,
+        context_dim: int | None = None,
         activation_fn: str = "geglu",
         ff_inner_mult: float = 4.0,
     ):
@@ -424,8 +422,8 @@ class BasicTransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 

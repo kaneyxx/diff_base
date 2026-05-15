@@ -12,24 +12,23 @@ Key SD3.5 MM-DiT characteristics:
 - Positional embeddings up to 192x192 patches
 """
 
-from typing import Optional, Dict, Any
+from typing import Any
 
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
+from .components.attention import JointTransformerBlock
 from .components.embeddings import (
-    PatchEmbed,
     CombinedTimestepTextProjEmbeddings,
+    PatchEmbed,
     PositionalEmbedding2D,
     get_timestep_embedding,
 )
-from .components.attention import JointTransformerBlock
 from .components.layers import AdaLayerNormContinuous
 
-
 # Variant configurations
-SD3_VARIANT_CONFIGS: Dict[str, Dict[str, Any]] = {
+SD3_VARIANT_CONFIGS: dict[str, dict[str, Any]] = {
     "large": {
         "depth": 38,
         "hidden_size": 2432,  # 64 * 38
