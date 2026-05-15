@@ -1,0 +1,49 @@
+# Example: FLUX.1 Kontext LoRA Training
+# Trains FLUX.1-dev for image-editing via the Kontext (paired reference) approach.
+
+_base_:
+  - ../models/flux1_kontext.yaml
+  - ../training/kontext_lora.yaml
+
+experiment:
+  name: "flux1-kontext-lora"
+  output_dir: "./outputs/flux1_kontext_lora"
+  seed: 42
+
+model:
+  pretrained_path: "/path/to/flux1-dev-kontext"
+  dtype: "bfloat16"
+
+training:
+  epochs: 50
+  batch_size: 2
+  gradient_accumulation: 4
+  learning_rate: 1.0e-4
+
+  lora:
+    rank: 16
+    alpha: 16
+    train_text_encoder: false
+
+  guidance_scale: 3.5
+
+# Kontext dataset: expects metadata.json with target/reference/caption triplets
+# or directory pairs (*_target.png / *_ref.png / *_caption.txt).
+data:
+  train_path: "/path/to/kontext-dataset"
+  target_resolution: 1024
+  reference_resolution: 1024
+  num_workers: 4
+
+hardware:
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+  compile: false
+
+logging:
+  wandb:
+    enabled: false
+    project: "diff-base"
+    tags: ["flux1", "kontext", "lora"]
+  tensorboard:
+    enabled: true

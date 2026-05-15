@@ -1,0 +1,55 @@
+# Smoke test config: Kontext LoRA on ORION at 512×512, 2 steps, A40 budget.
+# Intentionally uses no pretrained_path → random-init transformer to verify the
+# training pipeline plumbing (dataset → model → loss → backward → optimizer).
+
+_base_:
+  - ../models/flux1_kontext.yaml
+  - ../training/kontext_lora.yaml
+
+experiment:
+  name: "smoke-kontext-lora-orion"
+  output_dir: "./outputs/_smoke_kontext_lora_orion"
+  seed: 42
+
+model:
+  dtype: "bfloat16"
+  pretrained_path: "/n/scratch/users/f/fas994/huggingface/hub/models--black-forest-labs--FLUX.1-Kontext-dev/snapshots/24e9dedc4ef646698dc8eb4e18ae2cec3c9fea0d"
+  text_encoder:
+    cpu_offload: true
+
+training:
+  method: "kontext_lora"
+  epochs: 1
+  max_steps: 2
+  batch_size: 1
+  gradient_accumulation: 1
+  learning_rate: 1.0e-7
+
+  lora:
+    rank: 8
+    alpha: 8
+    train_text_encoder: false
+
+  guidance_scale: 3.5
+
+data:
+  dataset_type: "orion"
+  train_path: "/n/scratch/users/f/fas994/bao/data"
+  train_split_path: "/n/scratch/users/f/fas994/bao/dataset/training_splits/CD45_train.json"
+  biomarker: "CD45"
+  max_samples: 8
+  target_resolution: 512
+  reference_resolution: 512
+  resolution: 512
+  num_workers: 0
+
+hardware:
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+  compile: false
+
+logging:
+  wandb:
+    enabled: false
+  tensorboard:
+    enabled: false
