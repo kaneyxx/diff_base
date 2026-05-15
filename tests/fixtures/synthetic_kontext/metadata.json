@@ -1,0 +1,22 @@
+[
+  {
+    "image": "image_000.png",
+    "reference": "reference_000.png",
+    "caption": "a synthetic test image number 0"
+  },
+  {
+    "image": "image_001.png",
+    "reference": "reference_001.png",
+    "caption": "a synthetic test image number 1"
+  },
+  {
+    "image": "image_002.png",
+    "reference": "reference_002.png",
+    "caption": "a synthetic test image number 2"
+  },
+  {
+    "image": "image_003.png",
+    "reference": "reference_003.png",
+    "caption": "a synthetic test image number 3"
+  }
+]

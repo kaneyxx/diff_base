@@ -1,0 +1,8 @@
+{
+  "seed": 1234,
+  "batch_size": 2,
+  "img_size": 64,
+  "flow_shift": false,
+  "loss": 2.2165486812591553,
+  "description": "Reference loss for KontextTrainerMixin with flow_shift=False (legacy path). SEQ_DIM=16 (4 latent_ch * 2x2 patch). Recorded from _LegacyTransformer(Linear(16,16), seed=7 via fork_rng), _LegacyVAE(seed=42 via fork_rng), encode_text(seed=99 via fork_rng), batch seed=1234."
+}
