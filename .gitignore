@@ -112,3 +112,8 @@ pretrained/
 
 # references
 ref/
+
+# Kempner 2026 raw audit-trail (regenerable from a single sweep submission)
+proposals/kempner_2026/04_scalability_testing/logs/
+proposals/kempner_2026/04_scalability_testing/results/kempnerpulse_*.csv
+proposals/kempner_2026/04_scalability_testing/_generated/
