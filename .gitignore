@@ -113,7 +113,11 @@ pretrained/
 # references
 ref/
 
-# Kempner 2026 raw audit-trail (regenerable from a single sweep submission)
-proposals/kempner_2026/04_scalability_testing/logs/
-proposals/kempner_2026/04_scalability_testing/results/kempnerpulse_*.csv
-proposals/kempner_2026/04_scalability_testing/_generated/
+# Local-only working dirs (kept out of the public repo)
+proposals/
+docs/
+
+# Per-job raw artefacts under the public benchmarks/ tree (regenerable)
+benchmarks/**/logs/
+benchmarks/**/_generated/
+benchmarks/**/results/gpu_metrics_*.csv

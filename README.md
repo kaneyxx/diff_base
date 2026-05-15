@@ -532,14 +532,9 @@ training:
 python -m pytest tests/ -v
 ```
 
-## Documentation & Proposals
+## Benchmarks
 
-- [Full Fine-tune Recipes](docs/full_finetune_recipes.md) — single-GPU, multi-GPU FSDP, FLUX.2, and troubleshooting guides
-- [FLUX.2 Architecture Audit](docs/flux2_audit.md) — alignment notes, deferred items, and implementation status
-- [AI Toolkit Audit](docs/ai_toolkit_audit.md) — comparison against upstream ai-toolkit codebase
-- [Pretrained Weights Inventory](docs/pretrained_weights_inventory.md) — required checkpoints and download paths
-- [Kempner 2026 Technical Readiness](proposals/kempner_2026/README.md) — Kempner 2026 grant technical readiness package
-- [Kempner 2026 Scalability Testing](proposals/kempner_2026/04_scalability_testing/submission/README.md) — proposal-ready scalability testing package
+- [FLUX.1-Kontext LoRA Scalability](benchmarks/flux_kontext_scalability/README.md) — DDP scaling on 1/2/4 A100 80GB across LoRA ranks 16/32/64; SLURM submit + nvidia-smi recorder + plotting; reproduces the throughput / memory / utilisation grid in `benchmarks/flux_kontext_scalability/results/`.
 
 ## License
 

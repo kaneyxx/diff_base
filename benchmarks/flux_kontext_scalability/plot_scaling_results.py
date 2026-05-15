@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Plot scalability sweep results into proposal-ready PNG figures.
+"""Plot scalability sweep results into publication-ready PNG figures.
 
-Reads the kempnerpulse_*gpu_<jobid>.csv files and the corresponding
-scalability_<jobid>.err training logs, emits four figures into
+Reads the gpu_metrics_*gpu_<jobid>.csv files and the corresponding
+scalability_<jobid>.out training logs, emits four figures into
 results/plots/:
 
   1. scaling_efficiency.png   — throughput vs GPU count + ideal line
@@ -28,13 +28,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def parse_jobid_from_filename(path: Path) -> str | None:
-    """kempnerpulse_2gpu_40047373.csv -> '40047373'."""
+    """gpu_metrics_2gpu_40047373.csv -> '40047373'."""
     m = re.search(r"_(\d{8})\.csv$", path.name)
     return m.group(1) if m else None
 
 
 def parse_gpu_count_from_filename(path: Path) -> int | None:
-    """kempnerpulse_2gpu_40047373.csv -> 2."""
+    """gpu_metrics_2gpu_40047373.csv -> 2."""
     m = re.search(r"_(\d+)gpu_", path.name)
     return int(m.group(1)) if m else None
 
@@ -79,10 +79,10 @@ def parse_rank_bs_from_generated(jobid: str, gpus: int, gen_dir: Path) -> tuple[
 
 
 def load_runs(results_dir: Path, logs_dir: Path) -> list[dict]:
-    """Discover kempnerpulse_*.csv files and pair with logs + config metadata."""
+    """Discover gpu_metrics_*.csv files and pair with logs + config metadata."""
     runs = []
     gen_dir = results_dir.parent / "_generated"
-    for csv_path in sorted(results_dir.glob("kempnerpulse_*.csv")):
+    for csv_path in sorted(results_dir.glob("gpu_metrics_*.csv")):
         jobid = parse_jobid_from_filename(csv_path)
         gpus = parse_gpu_count_from_filename(csv_path)
         if jobid is None or gpus is None:
@@ -335,7 +335,7 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     runs = load_runs(args.results_dir, args.logs_dir)
     if not runs:
-        print(f"no kempnerpulse_*.csv found in {args.results_dir}")
+        print(f"no gpu_metrics_*.csv found in {args.results_dir}")
         return 1
     print(f"found {len(runs)} runs: " + ", ".join(f"{r['gpus']}gpu({r['jobid']})" for r in runs))
 

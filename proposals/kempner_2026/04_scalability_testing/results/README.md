@@ -1,1 +1,0 @@
-Post-run CSVs from KempnerPulse land here (kempnerpulse_{1,2,4}gpu_<jobid>.csv). After the SLURM array job completes, run `python ../parse_pulse_csv.py kempnerpulse_NgpuJOBID.csv N` for each CSV (substituting the actual GPU count N) to print one markdown table row, then paste the row into summary_table.md.
